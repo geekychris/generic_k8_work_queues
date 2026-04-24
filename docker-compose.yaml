@@ -1,0 +1,121 @@
+services:
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  controller:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["--local", "-config", "/etc/kqueue/config.yaml"]
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - ./docker-compose.config.yaml:/etc/kqueue/config.yaml:ro
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  echo-worker:
+    build:
+      context: ./examples/echo-worker
+      dockerfile: Dockerfile
+    environment:
+      - FAILURE_RATE=0.1
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  echo-sidecar:
+    build:
+      context: .
+      dockerfile: Dockerfile.sidecar
+    environment:
+      - NATS_URL=nats://nats:4222
+      - QUEUE_NAME=echo
+      - QUEUE_SUBJECT=kqueue.echo
+      - WORKER_URL=http://echo-worker:8080/process
+      - MAX_RETRIES=3
+      - STREAM_PREFIX=kqueue
+    depends_on:
+      echo-worker:
+        condition: service_healthy
+      controller:
+        condition: service_started
+
+  nlp-worker:
+    build:
+      context: ./examples/nlp-worker
+      dockerfile: Dockerfile
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  nlp-sidecar:
+    build:
+      context: .
+      dockerfile: Dockerfile.sidecar
+    environment:
+      - NATS_URL=nats://nats:4222
+      - QUEUE_NAME=nlp
+      - QUEUE_SUBJECT=kqueue.nlp
+      - WORKER_URL=http://nlp-worker:8080/process
+      - MAX_RETRIES=2
+      - STREAM_PREFIX=kqueue
+    depends_on:
+      nlp-worker:
+        condition: service_healthy
+      controller:
+        condition: service_started
+
+  # Sandbox worker executes arbitrary shell commands.
+  # In Kubernetes, this runs with gVisor (RuntimeClass: gvisor) for syscall isolation.
+  # In docker-compose, gVisor is not available so it runs without sandboxing.
+  sandbox-worker:
+    build:
+      context: ./examples/sandbox-worker
+      dockerfile: Dockerfile
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  sandbox-sidecar:
+    build:
+      context: .
+      dockerfile: Dockerfile.sidecar
+    environment:
+      - NATS_URL=nats://nats:4222
+      - QUEUE_NAME=sandbox
+      - QUEUE_SUBJECT=kqueue.sandbox
+      - WORKER_URL=http://sandbox-worker:8080/process
+      - MAX_RETRIES=1
+      - STREAM_PREFIX=kqueue
+    depends_on:
+      sandbox-worker:
+        condition: service_healthy
+      controller:
+        condition: service_started

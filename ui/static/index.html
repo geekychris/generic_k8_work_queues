@@ -1,0 +1,1406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KQueue Dashboard</title>
+<style>
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --bg-hover: #30363d;
+  --border: #30363d;
+  --border-light: #484f58;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #6e7681;
+  --accent: #58a6ff;
+  --accent-dim: #1f6feb;
+  --green: #3fb950;
+  --green-dim: #238636;
+  --yellow: #d29922;
+  --yellow-dim: #9e6a03;
+  --red: #f85149;
+  --red-dim: #da3633;
+  --orange: #db6d28;
+  --purple: #bc8cff;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+  --radius: 8px;
+  --shadow: 0 2px 8px rgba(0,0,0,0.3);
+  --transition: 0.25s ease;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.5;
+  min-height: 100vh;
+}
+
+.header {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.header h1 {
+  font-size: 20px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header h1 .logo {
+  width: 28px; height: 28px;
+  background: var(--accent);
+  border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--bg-primary);
+}
+
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.status-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  display: inline-block;
+  margin-right: 4px;
+  animation: pulse 2s infinite;
+}
+
+.status-dot.error { background: var(--red); animation: none; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.main {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.section {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.section-header {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: default;
+}
+
+.section-header.collapsible {
+  cursor: pointer;
+  user-select: none;
+}
+
+.section-header.collapsible:hover {
+  background: var(--bg-tertiary);
+}
+
+.section-header .chevron {
+  transition: transform var(--transition);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.section-header.collapsible.collapsed .chevron {
+  transform: rotate(-90deg);
+}
+
+.section-body {
+  padding: 20px;
+  transition: max-height 0.3s ease, opacity 0.2s ease;
+  overflow: hidden;
+}
+
+.section-body.collapsed {
+  max-height: 0 !important;
+  padding: 0 20px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.queue-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+.queue-card {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  transition: border-color var(--transition), box-shadow var(--transition);
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.queue-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: var(--green);
+  transition: background var(--transition);
+}
+
+.queue-card.warning::before { background: var(--yellow); }
+.queue-card.error::before { background: var(--red); }
+
+.queue-card:hover {
+  border-color: var(--border-light);
+  box-shadow: var(--shadow);
+}
+
+.queue-card-name {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 14px;
+  color: var(--accent);
+}
+
+.queue-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.metric { text-align: center; }
+
+.metric-value {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  transition: color var(--transition);
+}
+
+.metric-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+}
+
+.metric-value.pending { color: var(--yellow); }
+.metric-value.processing { color: var(--accent); }
+.metric-value.completed { color: var(--green); }
+.metric-value.failed { color: var(--red); }
+.metric-value.dead_letter { color: var(--orange); }
+
+.queue-workers {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.worker-count {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.worker-bar {
+  flex: 1;
+  max-width: 120px;
+  height: 6px;
+  background: var(--bg-primary);
+  border-radius: 3px;
+  margin: 0 12px;
+  overflow: hidden;
+}
+
+.worker-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width var(--transition);
+}
+
+.sparkline-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 32px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.spark-bar {
+  flex: 1;
+  min-width: 3px;
+  background: var(--accent-dim);
+  border-radius: 1px 1px 0 0;
+  transition: height 0.4s ease;
+  opacity: 0.7;
+}
+
+.spark-bar:last-child {
+  opacity: 1;
+  background: var(--accent);
+}
+
+.empty-state {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--text-secondary);
+}
+
+.form-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+  align-items: flex-end;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.form-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+input, select, textarea {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 10px 12px;
+  outline: none;
+  transition: border-color var(--transition);
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+button {
+  background: var(--accent-dim);
+  color: var(--text-primary);
+  border: 1px solid var(--accent-dim);
+  border-radius: 6px;
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition);
+  white-space: nowrap;
+}
+
+button:hover { background: var(--accent); }
+button:active { transform: scale(0.98); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+button.btn-sm {
+  padding: 5px 12px;
+  font-size: 12px;
+}
+
+button.btn-green {
+  background: var(--green-dim);
+  border-color: var(--green-dim);
+}
+button.btn-green:hover { background: var(--green); }
+
+button.btn-secondary {
+  background: var(--bg-tertiary);
+  border-color: var(--border);
+}
+button.btn-secondary:hover { background: var(--bg-hover); }
+
+.result-box {
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 400px;
+  overflow-y: auto;
+  display: none;
+}
+
+.result-box.visible { display: block; }
+.result-box.error { border-color: var(--red-dim); color: var(--red); }
+.result-box.success { border-color: var(--green-dim); }
+
+/* Stats summary bar */
+.stats-bar {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.stat-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.stat-item .val {
+  font-family: var(--font-mono);
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.stat-item .lbl {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* Status badges */
+.status-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-badge.pending { background: var(--yellow-dim); color: var(--yellow); }
+.status-badge.processing { background: var(--accent-dim); color: var(--accent); }
+.status-badge.completed { background: var(--green-dim); color: var(--green); }
+.status-badge.failed { background: var(--red-dim); color: var(--red); }
+.status-badge.dead_letter { background: #4a2000; color: var(--orange); }
+
+/* Job table */
+.job-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.job-table th {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 2px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.job-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.job-table tr:hover td {
+  background: var(--bg-tertiary);
+}
+
+.job-table tr {
+  cursor: pointer;
+}
+
+.job-id-cell {
+  color: var(--accent);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Job detail panel */
+.job-detail-panel {
+  display: none;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-top: 12px;
+  overflow: hidden;
+}
+
+.job-detail-panel.visible { display: block; }
+
+.job-detail-panel .panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-tertiary);
+}
+
+.job-detail-panel .panel-body {
+  padding: 16px;
+}
+
+.job-detail-grid {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px 16px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.job-detail-grid dt {
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  align-self: center;
+}
+
+.job-detail-grid dd {
+  font-family: var(--font-mono);
+  padding: 4px 0;
+  word-break: break-all;
+}
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+.tab {
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all var(--transition);
+}
+
+.tab:hover { color: var(--text-primary); }
+.tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* Log entries */
+.log-entries {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.log-entry {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 12px;
+}
+
+.log-entry:last-child { border-bottom: none; }
+
+.log-time {
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.log-level {
+  font-weight: 600;
+  width: 40px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.log-level.info { color: var(--accent); }
+.log-level.warn { color: var(--yellow); }
+.log-level.error { color: var(--red); }
+
+.log-msg {
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+/* Filter bar */
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.filter-bar select {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+/* DLQ */
+.dlq-queue { margin-bottom: 16px; }
+.dlq-queue:last-child { margin-bottom: 0; }
+
+.dlq-queue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.dlq-queue-header:hover { background: var(--bg-hover); }
+
+.dlq-badge {
+  background: var(--red-dim);
+  color: var(--text-primary);
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.dlq-badge.zero {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
+.dlq-jobs {
+  display: none;
+  margin-top: 8px;
+  padding-left: 16px;
+}
+
+.dlq-jobs.expanded { display: block; }
+
+.dlq-job {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.dlq-job-id {
+  font-family: var(--font-mono);
+  color: var(--orange);
+  font-size: 12px;
+}
+
+.dlq-job-error {
+  color: var(--red);
+  font-size: 12px;
+  flex: 1;
+  margin: 0 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 20px;
+  font-size: 13px;
+  box-shadow: var(--shadow);
+  z-index: 200;
+  opacity: 0;
+  transform: translateY(12px);
+  transition: all 0.3s ease;
+  pointer-events: none;
+}
+
+.toast.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.toast.success { border-left: 3px solid var(--green); }
+.toast.error { border-left: 3px solid var(--red); }
+
+pre.payload-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+@media (max-width: 768px) {
+  .main { padding: 16px; }
+  .queue-grid { grid-template-columns: 1fr; }
+  .form-row { flex-direction: column; }
+  .header { padding: 12px 16px; }
+  .stats-bar { gap: 16px; }
+  .stat-item .val { font-size: 22px; }
+  .job-detail-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span class="logo">K</span> KQueue Dashboard</h1>
+  <div class="header-status">
+    <span><span class="status-dot" id="statusDot"></span> <span id="statusText">Connecting...</span></span>
+    <span id="lastUpdate" style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted)"></span>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- Aggregate Stats -->
+  <div class="section">
+    <div class="section-header">Cluster Overview</div>
+    <div class="section-body">
+      <div class="stats-bar" id="statsBar">
+        <div class="stat-item"><span class="val" id="totalQueues" style="color:var(--accent)">-</span><span class="lbl">Queues</span></div>
+        <div class="stat-item"><span class="val" id="totalPending" style="color:var(--yellow)">-</span><span class="lbl">Pending</span></div>
+        <div class="stat-item"><span class="val" id="totalProcessing" style="color:var(--accent)">-</span><span class="lbl">Processing</span></div>
+        <div class="stat-item"><span class="val" id="totalCompleted" style="color:var(--green)">-</span><span class="lbl">Completed</span></div>
+        <div class="stat-item"><span class="val" id="totalFailed" style="color:var(--red)">-</span><span class="lbl">Failed</span></div>
+        <div class="stat-item"><span class="val" id="totalWorkers" style="color:var(--purple)">-</span><span class="lbl">Workers</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Queue Cards -->
+  <div class="section">
+    <div class="section-header">Queues <span style="font-weight:400;font-size:12px;color:var(--text-muted);margin-left:8px">Click a queue to browse jobs</span></div>
+    <div class="section-body">
+      <div class="queue-grid" id="queueGrid">
+        <div class="empty-state"><div>Waiting for queue data...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Job Browser (shown when clicking a queue) -->
+  <div class="section" id="jobBrowserSection" style="display:none">
+    <div class="section-header">
+      <span>Jobs: <span id="jobBrowserQueueName" style="font-family:var(--font-mono);color:var(--accent)"></span></span>
+      <button class="btn-sm btn-secondary" onclick="closeJobBrowser()">Close</button>
+    </div>
+    <div class="section-body">
+      <div class="filter-bar">
+        <label style="font-size:12px;color:var(--text-secondary)">Status:</label>
+        <select id="jobStatusFilter" onchange="loadJobs()">
+          <option value="">All</option>
+          <option value="pending">Pending</option>
+          <option value="processing">Processing</option>
+          <option value="completed">Completed</option>
+          <option value="failed">Failed</option>
+          <option value="dead_letter">Dead Letter</option>
+        </select>
+        <button class="btn-sm btn-secondary" onclick="loadJobs()">Refresh</button>
+      </div>
+      <div id="jobTableContainer">
+        <table class="job-table">
+          <thead>
+            <tr>
+              <th>Job ID</th>
+              <th>Status</th>
+              <th>Attempts</th>
+              <th>Created</th>
+              <th>Duration</th>
+            </tr>
+          </thead>
+          <tbody id="jobTableBody"></tbody>
+        </table>
+      </div>
+      <!-- Job detail panel -->
+      <div class="job-detail-panel" id="jobDetailPanel">
+        <div class="panel-header">
+          <span style="font-weight:600">Job Detail</span>
+          <button class="btn-sm btn-secondary" onclick="closeJobDetail()">Close</button>
+        </div>
+        <div class="panel-body">
+          <div class="tabs" id="jobDetailTabs">
+            <div class="tab active" onclick="switchTab('info', this)">Info</div>
+            <div class="tab" onclick="switchTab('result', this)">Result</div>
+            <div class="tab" onclick="switchTab('logs', this)">Logs</div>
+          </div>
+          <div class="tab-content active" id="tab-info"></div>
+          <div class="tab-content" id="tab-result"></div>
+          <div class="tab-content" id="tab-logs"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Submit Job -->
+  <div class="section">
+    <div class="section-header collapsible" onclick="toggleSection(this)">
+      Submit Job <span class="chevron">&#9660;</span>
+    </div>
+    <div class="section-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Queue</label>
+          <select id="queueSelect"><option value="">Select queue...</option></select>
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom:12px">
+        <label>Payload (JSON)</label>
+        <textarea id="jobPayload" placeholder='{"key": "value"}'>{}</textarea>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button onclick="submitJob()" id="submitBtn">Submit Job</button>
+        <button onclick="submitBatch()" class="btn-secondary" id="batchBtn">Submit 10x</button>
+      </div>
+      <div class="result-box" id="submitResult"></div>
+    </div>
+  </div>
+
+  <!-- Job Lookup -->
+  <div class="section">
+    <div class="section-header collapsible" onclick="toggleSection(this)">
+      Job Lookup <span class="chevron">&#9660;</span>
+    </div>
+    <div class="section-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Job ID</label>
+          <input type="text" id="jobIdInput" placeholder="Enter job ID..." />
+        </div>
+        <button onclick="lookupJob()" style="align-self:flex-end">Lookup</button>
+      </div>
+      <div class="result-box" id="lookupResult"></div>
+    </div>
+  </div>
+
+  <!-- DLQ Panel -->
+  <div class="section">
+    <div class="section-header collapsible" onclick="toggleSection(this)">
+      Dead Letter Queues <span class="chevron">&#9660;</span>
+    </div>
+    <div class="section-body">
+      <div id="dlqContainer">
+        <div class="empty-state" style="padding:24px"><div>No queues loaded yet.</div></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function() {
+  'use strict';
+
+  let queues = [];
+  let sparkData = {};
+  const SPARK_LEN = 20;
+  let errorCount = 0;
+  let currentBrowseQueue = null;
+  let currentJobDetail = null;
+
+  const queueGrid = document.getElementById('queueGrid');
+  const queueSelect = document.getElementById('queueSelect');
+  const statusDot = document.getElementById('statusDot');
+  const statusText = document.getElementById('statusText');
+  const lastUpdate = document.getElementById('lastUpdate');
+
+  function formatNum(n) {
+    if (n === undefined || n === null) return '-';
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    return String(n);
+  }
+
+  function formatTime(ts) {
+    if (!ts) return '-';
+    const d = new Date(ts);
+    return d.toLocaleTimeString();
+  }
+
+  function formatDuration(start, end) {
+    if (!start || !end) return '-';
+    const ms = new Date(end) - new Date(start);
+    if (ms < 1000) return ms + 'ms';
+    return (ms / 1000).toFixed(2) + 's';
+  }
+
+  function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast visible ' + (type || '');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.className = 'toast', 3000);
+  }
+
+  function escHtml(s) {
+    if (typeof s !== 'string') s = String(s);
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  window.toggleSection = function(header) {
+    header.classList.toggle('collapsed');
+    header.nextElementSibling.classList.toggle('collapsed');
+  };
+
+  function queueStatus(q) {
+    if (q.dead_letter > 0) return 'error';
+    if (q.failed > 0) return 'warning';
+    if (q.pending > 20) return 'warning';
+    return '';
+  }
+
+  // ------- Fetch -------
+
+  async function fetchQueues() {
+    try {
+      const res = await fetch('/api/v1/queues');
+      if (!res.ok) throw new Error(res.statusText);
+      const data = await res.json();
+      errorCount = 0;
+      statusDot.className = 'status-dot';
+      statusText.textContent = 'Connected';
+      lastUpdate.textContent = new Date().toLocaleTimeString();
+      queues = Array.isArray(data) ? data : [];
+      updateUI();
+    } catch (e) {
+      errorCount++;
+      if (errorCount >= 2) {
+        statusDot.className = 'status-dot error';
+        statusText.textContent = 'Disconnected';
+      }
+    }
+  }
+
+  // ------- Submit -------
+
+  window.submitJob = async function() {
+    const queue = queueSelect.value;
+    const resultBox = document.getElementById('submitResult');
+    if (!queue) { showToast('Select a queue', 'error'); return; }
+
+    let payload;
+    try { payload = JSON.parse(document.getElementById('jobPayload').value || '{}'); }
+    catch(e) { showToast('Invalid payload JSON', 'error'); return; }
+
+    const btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.textContent = 'Submitting...';
+
+    try {
+      const res = await fetch('/api/v1/jobs', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ queue, payload })
+      });
+      const data = await res.json();
+      resultBox.className = 'result-box visible ' + (res.ok ? 'success' : 'error');
+      resultBox.textContent = JSON.stringify(data, null, 2);
+      if (res.ok) showToast('Job submitted: ' + (data.job_id || '').substring(0,8) + '...', 'success');
+    } catch(e) {
+      resultBox.className = 'result-box visible error';
+      resultBox.textContent = 'Error: ' + e.message;
+    }
+    btn.disabled = false;
+    btn.textContent = 'Submit Job';
+  };
+
+  window.submitBatch = async function() {
+    const queue = queueSelect.value;
+    if (!queue) { showToast('Select a queue', 'error'); return; }
+
+    let payload;
+    try { payload = JSON.parse(document.getElementById('jobPayload').value || '{}'); }
+    catch(e) { showToast('Invalid payload JSON', 'error'); return; }
+
+    const btn = document.getElementById('batchBtn');
+    btn.disabled = true;
+    btn.textContent = 'Submitting...';
+
+    const promises = [];
+    for (let i = 0; i < 10; i++) {
+      const p = { ...payload, _batch_index: i };
+      promises.push(fetch('/api/v1/jobs', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ queue, payload: p })
+      }));
+    }
+
+    try {
+      await Promise.all(promises);
+      showToast('10 jobs submitted to ' + queue, 'success');
+    } catch(e) {
+      showToast('Batch error: ' + e.message, 'error');
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Submit 10x';
+    fetchQueues();
+  };
+
+  // ------- Lookup -------
+
+  window.lookupJob = async function() {
+    const jobId = document.getElementById('jobIdInput').value.trim();
+    const resultBox = document.getElementById('lookupResult');
+    if (!jobId) { showToast('Enter a job ID', 'error'); return; }
+
+    try {
+      const res = await fetch('/api/v1/jobs/' + encodeURIComponent(jobId));
+      if (!res.ok) throw new Error('Job not found (HTTP ' + res.status + ')');
+      const job = await res.json();
+
+      // Also fetch logs
+      let logs = [];
+      try {
+        const logRes = await fetch('/api/v1/jobs/' + encodeURIComponent(jobId) + '/logs');
+        if (logRes.ok) logs = await logRes.json();
+      } catch(e) {}
+
+      resultBox.className = 'result-box visible success';
+      resultBox.innerHTML = renderInlineJobDetail(job, logs);
+    } catch(e) {
+      resultBox.className = 'result-box visible error';
+      resultBox.textContent = e.message;
+    }
+  };
+
+  document.getElementById('jobIdInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') lookupJob();
+  });
+
+  function renderInlineJobDetail(job, logs) {
+    let html = '<dl class="job-detail-grid">'
+      + dt('ID', job.id)
+      + dt('Queue', job.queue)
+      + dt('Status', '<span class="status-badge ' + job.status + '">' + job.status + '</span>')
+      + dt('Attempts', job.attempts)
+      + dt('Created', formatTime(job.created_at))
+      + dt('Duration', formatDuration(job.started_at, job.completed_at || job.updated_at));
+
+    if (job.error) html += dt('Error', '<span style="color:var(--red)">' + escHtml(job.error) + '</span>');
+
+    html += '</dl>';
+
+    if (job.result) {
+      html += '<div style="margin-bottom:12px"><strong style="font-size:12px;color:var(--text-secondary)">RESULT</strong>'
+        + '<pre class="payload-pre" style="margin-top:6px;background:var(--bg-tertiary);padding:10px;border-radius:6px">' + escHtml(JSON.stringify(job.result, null, 2)) + '</pre></div>';
+    }
+
+    if (job.payload) {
+      html += '<div style="margin-bottom:12px"><strong style="font-size:12px;color:var(--text-secondary)">PAYLOAD</strong>'
+        + '<pre class="payload-pre" style="margin-top:6px;background:var(--bg-tertiary);padding:10px;border-radius:6px">' + escHtml(JSON.stringify(job.payload, null, 2)) + '</pre></div>';
+    }
+
+    if (logs && logs.length > 0) {
+      html += '<div><strong style="font-size:12px;color:var(--text-secondary)">LOGS</strong>';
+      html += '<div class="log-entries" style="margin-top:6px">';
+      logs.forEach(l => {
+        const ts = l.timestamp ? new Date(l.timestamp).toLocaleTimeString() : '';
+        html += '<div class="log-entry">'
+          + '<span class="log-time">' + ts + '</span>'
+          + '<span class="log-level ' + (l.level || 'info') + '">' + (l.level || 'info') + '</span>'
+          + '<span class="log-msg">' + escHtml(l.message) + '</span>'
+          + '</div>';
+      });
+      html += '</div></div>';
+    }
+
+    return html;
+  }
+
+  function dt(label, value) {
+    return '<dt>' + label + '</dt><dd>' + value + '</dd>';
+  }
+
+  // ------- Job Browser -------
+
+  window.openJobBrowser = function(queueName) {
+    currentBrowseQueue = queueName;
+    document.getElementById('jobBrowserQueueName').textContent = queueName;
+    document.getElementById('jobBrowserSection').style.display = 'block';
+    document.getElementById('jobStatusFilter').value = '';
+    closeJobDetail();
+    loadJobs();
+    document.getElementById('jobBrowserSection').scrollIntoView({ behavior: 'smooth' });
+  };
+
+  window.closeJobBrowser = function() {
+    currentBrowseQueue = null;
+    document.getElementById('jobBrowserSection').style.display = 'none';
+    closeJobDetail();
+  };
+
+  window.loadJobs = async function() {
+    if (!currentBrowseQueue) return;
+    const status = document.getElementById('jobStatusFilter').value;
+    const url = '/api/v1/queues/' + encodeURIComponent(currentBrowseQueue) + '/jobs' + (status ? '?status=' + status : '');
+
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Failed to load jobs');
+      const jobs = await res.json();
+      renderJobTable(jobs);
+    } catch(e) {
+      document.getElementById('jobTableBody').innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:20px">' + escHtml(e.message) + '</td></tr>';
+    }
+  };
+
+  function renderJobTable(jobs) {
+    const tbody = document.getElementById('jobTableBody');
+    if (!jobs || jobs.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:20px">No jobs found</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = jobs.map(j => {
+      const shortId = j.id.substring(0, 8) + '...';
+      const dur = formatDuration(j.started_at, j.completed_at || j.updated_at);
+      return '<tr onclick="openJobDetail(\'' + escHtml(j.id) + '\')">'
+        + '<td class="job-id-cell" title="' + escHtml(j.id) + '">' + shortId + '</td>'
+        + '<td><span class="status-badge ' + j.status + '">' + j.status + '</span></td>'
+        + '<td>' + j.attempts + '</td>'
+        + '<td>' + formatTime(j.created_at) + '</td>'
+        + '<td>' + dur + '</td>'
+        + '</tr>';
+    }).join('');
+  }
+
+  // ------- Job Detail Panel -------
+
+  window.openJobDetail = async function(jobId) {
+    currentJobDetail = jobId;
+    const panel = document.getElementById('jobDetailPanel');
+    panel.classList.add('visible');
+
+    // Fetch job and logs in parallel
+    const [jobRes, logRes] = await Promise.all([
+      fetch('/api/v1/jobs/' + encodeURIComponent(jobId)),
+      fetch('/api/v1/jobs/' + encodeURIComponent(jobId) + '/logs')
+    ]);
+
+    let job = null, logs = [];
+    if (jobRes.ok) job = await jobRes.json();
+    if (logRes.ok) logs = await logRes.json();
+
+    if (!job) {
+      document.getElementById('tab-info').innerHTML = '<div style="color:var(--red)">Failed to load job</div>';
+      return;
+    }
+
+    // Info tab
+    document.getElementById('tab-info').innerHTML = '<dl class="job-detail-grid">'
+      + dt('ID', '<span style="user-select:all">' + job.id + '</span>')
+      + dt('Queue', job.queue)
+      + dt('Status', '<span class="status-badge ' + job.status + '">' + job.status + '</span>')
+      + dt('Attempts', job.attempts + ' / ' + (job.max_retries || '-'))
+      + dt('Created', job.created_at ? new Date(job.created_at).toLocaleString() : '-')
+      + dt('Started', job.started_at ? new Date(job.started_at).toLocaleString() : '-')
+      + dt('Completed', job.completed_at ? new Date(job.completed_at).toLocaleString() : '-')
+      + dt('Duration', formatDuration(job.started_at, job.completed_at || job.updated_at))
+      + (job.error ? dt('Error', '<span style="color:var(--red)">' + escHtml(job.error) + '</span>') : '')
+      + '</dl>'
+      + '<strong style="font-size:12px;color:var(--text-secondary)">PAYLOAD</strong>'
+      + '<pre class="payload-pre" style="margin-top:6px;background:var(--bg-primary);padding:10px;border-radius:6px;border:1px solid var(--border)">' + escHtml(JSON.stringify(job.payload, null, 2)) + '</pre>';
+
+    // Result tab
+    if (job.result) {
+      document.getElementById('tab-result').innerHTML =
+        '<pre class="payload-pre" style="background:var(--bg-primary);padding:12px;border-radius:6px;border:1px solid var(--border)">'
+        + escHtml(JSON.stringify(job.result, null, 2)) + '</pre>';
+    } else {
+      document.getElementById('tab-result').innerHTML = '<div style="color:var(--text-muted);padding:12px">No result yet</div>';
+    }
+
+    // Logs tab
+    if (logs && logs.length > 0) {
+      let logHtml = '<div class="log-entries">';
+      logs.forEach(l => {
+        const ts = l.timestamp ? new Date(l.timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3}) : '';
+        logHtml += '<div class="log-entry">'
+          + '<span class="log-time">' + ts + '</span>'
+          + '<span class="log-level ' + (l.level || 'info') + '">' + escHtml(l.level || 'info') + '</span>'
+          + '<span class="log-msg">' + escHtml(l.message) + '</span>'
+          + '</div>';
+      });
+      logHtml += '</div>';
+      document.getElementById('tab-logs').innerHTML = logHtml;
+    } else {
+      document.getElementById('tab-logs').innerHTML = '<div style="color:var(--text-muted);padding:12px">No logs available</div>';
+    }
+
+    // Activate first tab
+    switchTab('info', document.querySelector('#jobDetailTabs .tab'));
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
+
+  window.switchTab = function(tabName, tabEl) {
+    document.querySelectorAll('#jobDetailTabs .tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('#jobDetailPanel .tab-content').forEach(c => c.classList.remove('active'));
+    tabEl.classList.add('active');
+    document.getElementById('tab-' + tabName).classList.add('active');
+  };
+
+  window.closeJobDetail = function() {
+    currentJobDetail = null;
+    document.getElementById('jobDetailPanel').classList.remove('visible');
+  };
+
+  // ------- DLQ -------
+
+  async function fetchDLQ(queueName) {
+    try {
+      const res = await fetch('/api/v1/queues/' + encodeURIComponent(queueName) + '/dlq');
+      if (!res.ok) return [];
+      return await res.json() || [];
+    } catch(e) { return []; }
+  }
+
+  window._toggleDLQ = async function(header, queueName) {
+    const jobsEl = header.nextElementSibling;
+    const isExpanding = !jobsEl.classList.contains('expanded');
+    jobsEl.classList.toggle('expanded');
+    if (isExpanding) {
+      jobsEl.innerHTML = '<div style="padding:10px;color:var(--text-muted)">Loading...</div>';
+      const jobs = await fetchDLQ(queueName);
+      if (!jobs || jobs.length === 0) {
+        jobsEl.innerHTML = '<div style="padding:10px;color:var(--text-muted);font-size:13px">No dead letter jobs.</div>';
+        return;
+      }
+      jobsEl.innerHTML = jobs.map(j =>
+        '<div class="dlq-job">'
+        + '<span class="dlq-job-id">' + escHtml((j.id || '').substring(0,12)) + '...</span>'
+        + '<span class="dlq-job-error">' + escHtml(j.error || '-') + '</span>'
+        + '<button class="btn-sm btn-green" onclick="window._retryDLQ(\'' + escHtml(queueName) + '\',\'' + escHtml(j.id) + '\',this)">Retry</button>'
+        + '</div>'
+      ).join('');
+    }
+  };
+
+  window._retryDLQ = async function(queueName, jobId, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Retrying...';
+    try {
+      const res = await fetch('/api/v1/queues/' + encodeURIComponent(queueName) + '/dlq/' + encodeURIComponent(jobId) + '/retry', { method: 'POST' });
+      if (!res.ok) throw new Error('Retry failed');
+      showToast('Job requeued', 'success');
+      btn.closest('.dlq-job').style.opacity = '0.3';
+      fetchQueues();
+    } catch(e) {
+      showToast(e.message, 'error');
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+    }
+  };
+
+  // ------- UI Rendering -------
+
+  function updateUI() {
+    renderQueueCards();
+    renderAggregateStats();
+    renderDLQ();
+    updateQueueSelect();
+  }
+
+  function renderAggregateStats() {
+    let tp = 0, tpr = 0, tc = 0, tf = 0, tw = 0;
+    queues.forEach(q => {
+      tp += q.pending || 0;
+      tpr += q.processing || 0;
+      tc += q.completed || 0;
+      tf += q.failed || 0;
+      tw += q.workers || 0;
+    });
+    document.getElementById('totalQueues').textContent = queues.length;
+    animateNum('totalPending', tp);
+    animateNum('totalProcessing', tpr);
+    animateNum('totalCompleted', tc);
+    animateNum('totalFailed', tf);
+    animateNum('totalWorkers', tw);
+  }
+
+  function animateNum(id, target) {
+    const el = document.getElementById(id);
+    const current = parseInt(el.textContent) || 0;
+    el.textContent = formatNum(target);
+    if (current !== target) {
+      el.style.transition = 'none';
+      el.style.transform = target > current ? 'scale(1.15)' : 'scale(0.95)';
+      requestAnimationFrame(() => {
+        el.style.transition = 'transform 0.3s ease';
+        el.style.transform = 'scale(1)';
+      });
+    }
+  }
+
+  function renderQueueCards() {
+    if (queues.length === 0) {
+      queueGrid.innerHTML = '<div class="empty-state"><div>No queues found</div></div>';
+      return;
+    }
+
+    queues.forEach(q => {
+      if (!sparkData[q.name]) sparkData[q.name] = [];
+      sparkData[q.name].push(q.completed || 0);
+      if (sparkData[q.name].length > SPARK_LEN) sparkData[q.name].shift();
+    });
+
+    queueGrid.innerHTML = queues.map(q => {
+      const status = queueStatus(q);
+      const workerPct = q.max_workers > 0 ? Math.round((q.workers / q.max_workers) * 100) : 0;
+      const sparks = sparkData[q.name] || [];
+      const maxSpark = Math.max(1, ...sparks);
+      const sparkBars = sparks.map(v =>
+        '<div class="spark-bar" style="height:' + Math.max(2, (v / maxSpark) * 30) + 'px"></div>'
+      ).join('');
+
+      return '<div class="queue-card ' + status + '" onclick="openJobBrowser(\'' + escHtml(q.name) + '\')">'
+        + '<div class="queue-card-name">' + escHtml(q.name) + '</div>'
+        + '<div class="queue-metrics">'
+        + metric(q.pending, 'Pending', 'pending')
+        + metric(q.processing, 'Processing', 'processing')
+        + metric(q.completed, 'Completed', 'completed')
+        + '</div>'
+        + '<div class="queue-metrics">'
+        + metric(q.failed, 'Failed', 'failed')
+        + metric(q.dead_letter, 'DLQ', 'dead_letter')
+        + '<div class="metric"><div class="metric-value" style="color:var(--purple)">' + formatNum(q.workers) + '</div><div class="metric-label">Workers</div></div>'
+        + '</div>'
+        + '<div class="queue-workers">'
+        + '<span>Workers</span>'
+        + '<div class="worker-bar"><div class="worker-bar-fill" style="width:' + workerPct + '%"></div></div>'
+        + '<span class="worker-count">' + q.workers + ' / ' + q.min_workers + '-' + q.max_workers + '</span>'
+        + '</div>'
+        + '<div class="sparkline-row">' + sparkBars + '</div>'
+        + '</div>';
+    }).join('');
+  }
+
+  function metric(val, label, cls) {
+    return '<div class="metric"><div class="metric-value ' + cls + '">' + formatNum(val) + '</div><div class="metric-label">' + label + '</div></div>';
+  }
+
+  function updateQueueSelect() {
+    const current = queueSelect.value;
+    const names = queues.map(q => q.name);
+    queueSelect.innerHTML = '<option value="">Select queue...</option>';
+    names.forEach(n => {
+      const opt = document.createElement('option');
+      opt.value = n;
+      opt.textContent = n;
+      if (n === current) opt.selected = true;
+      queueSelect.appendChild(opt);
+    });
+  }
+
+  function renderDLQ() {
+    const container = document.getElementById('dlqContainer');
+    if (queues.length === 0) {
+      container.innerHTML = '<div class="empty-state" style="padding:24px"><div>No queues loaded.</div></div>';
+      return;
+    }
+
+    const expanded = {};
+    container.querySelectorAll('.dlq-queue').forEach(el => {
+      if (el.querySelector('.dlq-jobs.expanded')) expanded[el.dataset.name] = true;
+    });
+
+    container.innerHTML = queues.map(q => {
+      const isZero = (q.dead_letter || 0) === 0;
+      return '<div class="dlq-queue" data-name="' + escHtml(q.name) + '">'
+        + '<div class="dlq-queue-header" onclick="window._toggleDLQ(this, \'' + escHtml(q.name) + '\')">'
+        + '<span style="font-family:var(--font-mono);font-size:13px;font-weight:600">' + escHtml(q.name) + '</span>'
+        + '<span class="dlq-badge ' + (isZero ? 'zero' : '') + '">' + (q.dead_letter || 0) + '</span>'
+        + '</div>'
+        + '<div class="dlq-jobs' + (expanded[q.name] ? ' expanded' : '') + '" id="dlq-jobs-' + escHtml(q.name) + '"></div></div>';
+    }).join('');
+
+    Object.keys(expanded).forEach(name => {
+      const el = document.getElementById('dlq-jobs-' + name);
+      if (el) window._toggleDLQ(el.previousElementSibling, name);
+    });
+  }
+
+  // ------- Init -------
+
+  fetchQueues();
+  setInterval(fetchQueues, 3000);
+
+})();
+</script>
+</body>
+</html>

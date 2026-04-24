@@ -1,0 +1,69 @@
+server:
+  port: 8080
+  ui_enabled: true
+
+nats:
+  url: nats://nats.kqueue.svc:4222
+  stream_prefix: kqueue
+
+queues:
+  - name: echo
+    worker_image: kqueue/echo-worker:latest
+    replicas:
+      min: 1
+      max: 10
+    resources:
+      cpu_request: "100m"
+      cpu_limit: "500m"
+      memory_request: "64Mi"
+      memory_limit: "256Mi"
+    max_retries: 3
+    processing_timeout: 60s
+    scale_strategy:
+      type: threshold
+      scale_up_threshold: 10
+      scale_down_threshold: 2
+      cooldown_seconds: 30
+      scale_up_step: 2
+      scale_down_step: 1
+
+  - name: nlp
+    worker_image: kqueue/nlp-worker:latest
+    replicas:
+      min: 1
+      max: 5
+    resources:
+      cpu_request: "200m"
+      cpu_limit: "1000m"
+      memory_request: "128Mi"
+      memory_limit: "512Mi"
+    max_retries: 2
+    processing_timeout: 120s
+    scale_strategy:
+      type: target_per_worker
+      target_per_worker: 5
+      cooldown_seconds: 60
+
+  - name: sandbox
+    worker_image: kqueue/sandbox-worker:latest
+    replicas:
+      min: 1
+      max: 5
+    resources:
+      cpu_request: "100m"
+      cpu_limit: "1000m"
+      memory_request: "64Mi"
+      memory_limit: "512Mi"
+    max_retries: 1
+    processing_timeout: 60s
+    runtime_class: gvisor
+    scale_strategy:
+      type: threshold
+      scale_up_threshold: 5
+      scale_down_threshold: 1
+      cooldown_seconds: 30
+      startup_cost_seconds: 5
+
+metrics:
+  enabled: true
+  port: 9090
