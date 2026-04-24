@@ -35,16 +35,18 @@ type Job struct {
 
 // QueueConfig defines a queue and its worker configuration
 type QueueConfig struct {
-	Name              string         `json:"name" yaml:"name"`
-	Subject           string         `json:"subject" yaml:"subject"` // NATS subject
-	WorkerImage       string         `json:"worker_image" yaml:"worker_image"`
-	Replicas          ReplicaConfig  `json:"replicas" yaml:"replicas"`
-	Resources         ResourceConfig `json:"resources" yaml:"resources"`
-	MaxRetries        int            `json:"max_retries" yaml:"max_retries"`
-	ProcessingTimeout time.Duration  `json:"processing_timeout" yaml:"processing_timeout"`
-	ScaleStrategy     ScaleStrategy  `json:"scale_strategy" yaml:"scale_strategy"`
-	PayloadSchema     interface{}    `json:"payload_schema,omitempty" yaml:"payload_schema,omitempty"` // JSON Schema for payload validation
-	RuntimeClass      string         `json:"runtime_class,omitempty" yaml:"runtime_class,omitempty"`   // Kubernetes RuntimeClass (e.g. "gvisor")
+	Name              string            `json:"name" yaml:"name"`
+	Subject           string            `json:"subject" yaml:"subject"` // NATS subject
+	WorkerImage       string            `json:"worker_image" yaml:"worker_image"`
+	Replicas          ReplicaConfig     `json:"replicas" yaml:"replicas"`
+	Resources         ResourceConfig    `json:"resources" yaml:"resources"`
+	MaxRetries        int               `json:"max_retries" yaml:"max_retries"`
+	ProcessingTimeout time.Duration     `json:"processing_timeout" yaml:"processing_timeout"`
+	ScaleStrategy     ScaleStrategy     `json:"scale_strategy" yaml:"scale_strategy"`
+	PayloadSchema     interface{}       `json:"payload_schema,omitempty" yaml:"payload_schema,omitempty"`       // JSON Schema for payload validation
+	RuntimeClass      string            `json:"runtime_class,omitempty" yaml:"runtime_class,omitempty"`         // Kubernetes RuntimeClass (e.g. "gvisor")
+	WorkerEnv         map[string]string `json:"worker_env,omitempty" yaml:"worker_env,omitempty"`               // Extra env vars for the worker container
+	ImagePullPolicy   string            `json:"image_pull_policy,omitempty" yaml:"image_pull_policy,omitempty"` // "Always", "Never", "IfNotPresent"
 }
 
 // ReplicaConfig defines min/max replicas

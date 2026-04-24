@@ -353,31 +353,24 @@ func buildStructuredReviewPrompt(p ReviewPayload, cloneDir string) string {
 
 	sb.WriteString(`Review the code changes below.
 
-IMPORTANT RULES:
-1. Respond with ONLY valid JSON. No text before or after.
-2. The "suggestion" field must contain the EXACT replacement code for the line. NOT a comment explaining what to do. It must be code that directly replaces the problematic line.
-3. The "line" must be the line number shown in the numbered source listing below.
+CRITICAL RULES - READ CAREFULLY:
+1. Respond with ONLY valid JSON. No markdown fences, no text before or after the JSON.
+2. Each comment "line" MUST match a line number from the numbered source listing below. Look at the "NN:" prefix on each source line.
+3. The "suggestion" MUST be the exact replacement code for the line at that line number. Copy the original line, then fix it. Do NOT write comments or explanations as the suggestion.
+4. If you cannot write a correct code fix, omit the "suggestion" field entirely - do not guess.
 
-Example of a GOOD suggestion for a SQL injection on line 29:
-{
-  "file": "Example.java",
-  "line": 29,
-  "severity": "critical",
-  "message": "SQL injection: user input concatenated into query string",
-  "suggestion": "String sql = \"SELECT * FROM users WHERE \" + field + \" = ?\";\nreturn entityManager.createNativeQuery(sql, User.class).setParameter(1, value).getResultList();"
-}
+EXAMPLE - if the source shows:
+29: String sql = "SELECT * FROM users WHERE " + field + " = '" + value + "'";
 
-Example of a BAD suggestion (do NOT do this):
-{
-  "suggestion": "// Use parameterized queries to prevent SQL injection"
-}
+A correct comment would be:
+{"file":"Controller.java","line":29,"severity":"critical","message":"SQL injection via string concatenation","suggestion":"String sql = \"SELECT * FROM users WHERE \" + field + \" = ?\";\nreturn entityManager.createNativeQuery(sql, User.class).setParameter(1, value).getResultList();"}
 
-The suggestion MUST be actual runnable code, not a comment.
+A WRONG comment would point to line 13 (class declaration) or suggest "// use parameterized queries".
 
-JSON format:
-{"summary":"one sentence","verdict":"approve or request_changes or comment","comments":[{"file":"path","line":123,"severity":"critical or warning or suggestion or praise","message":"what is wrong","suggestion":"replacement code"}]}
+JSON schema:
+{"summary":"one sentence","verdict":"approve|request_changes|comment","comments":[{"file":"path","line":NUMBER,"severity":"critical|warning|suggestion|praise","message":"description","suggestion":"replacement code or omit"}]}
 
-Severities: critical = security/crash/data-loss, warning = bugs/leaks, suggestion = style/perf, praise = good code.
+Severities: critical=security/crash/data-loss, warning=bugs/leaks, suggestion=style/perf, praise=good code.
 
 `)
 

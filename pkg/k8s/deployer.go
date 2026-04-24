@@ -99,27 +99,11 @@ func (d *Deployer) EnsureDeployment(ctx context.Context, cfg api.QueueConfig) er
 				Spec: corev1.PodSpec{
 					RuntimeClassName: runtimeClassPtr(cfg.RuntimeClass),
 					Containers: []corev1.Container{
+						d.buildWorkerContainer(cfg),
 						{
-							Name:  "worker",
-							Image: cfg.WorkerImage,
-							Ports: []corev1.ContainerPort{
-								{ContainerPort: 8080, Name: "http"},
-							},
-							Resources: d.buildResources(cfg.Resources),
-							ReadinessProbe: &corev1.Probe{
-								ProbeHandler: corev1.ProbeHandler{
-									HTTPGet: &corev1.HTTPGetAction{
-										Path: "/health",
-										Port: intstr.FromInt(8080),
-									},
-								},
-								InitialDelaySeconds: 5,
-								PeriodSeconds:       10,
-							},
-						},
-						{
-							Name:  "sidecar",
-							Image: d.sidecarImage,
+							Name:            "sidecar",
+							Image:           d.sidecarImage,
+							ImagePullPolicy: d.pullPolicy(cfg),
 							Env: []corev1.EnvVar{
 								{Name: "NATS_URL", Value: d.natsURL},
 								{Name: "QUEUE_NAME", Value: cfg.Name},
@@ -194,6 +178,48 @@ func (d *Deployer) GetCurrentReplicas(ctx context.Context, queueName string) (in
 		return 1, nil
 	}
 	return int(*deploy.Spec.Replicas), nil
+}
+
+func (d *Deployer) buildWorkerContainer(cfg api.QueueConfig) corev1.Container {
+	c := corev1.Container{
+		Name:            "worker",
+		Image:           cfg.WorkerImage,
+		ImagePullPolicy: d.pullPolicy(cfg),
+		Ports: []corev1.ContainerPort{
+			{ContainerPort: 8080, Name: "http"},
+		},
+		Resources: d.buildResources(cfg.Resources),
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: "/health",
+					Port: intstr.FromInt(8080),
+				},
+			},
+			InitialDelaySeconds: 5,
+			PeriodSeconds:       10,
+		},
+	}
+
+	// Add extra env vars from config
+	for k, v := range cfg.WorkerEnv {
+		c.Env = append(c.Env, corev1.EnvVar{Name: k, Value: v})
+	}
+
+	return c
+}
+
+func (d *Deployer) pullPolicy(cfg api.QueueConfig) corev1.PullPolicy {
+	switch cfg.ImagePullPolicy {
+	case "Always":
+		return corev1.PullAlways
+	case "Never":
+		return corev1.PullNever
+	case "IfNotPresent":
+		return corev1.PullIfNotPresent
+	default:
+		return corev1.PullIfNotPresent
+	}
 }
 
 func (d *Deployer) buildResources(cfg api.ResourceConfig) corev1.ResourceRequirements {

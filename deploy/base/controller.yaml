@@ -65,6 +65,7 @@ data:
     queues:
       - name: echo
         worker_image: kqueue/echo-worker:latest
+        image_pull_policy: Never
         replicas:
           min: 1
           max: 10
@@ -85,6 +86,7 @@ data:
 
       - name: nlp
         worker_image: kqueue/nlp-worker:latest
+        image_pull_policy: Never
         replicas:
           min: 1
           max: 5
@@ -99,6 +101,81 @@ data:
           type: target_per_worker
           target_per_worker: 5
           cooldown_seconds: 60
+          startup_cost_seconds: 30
+          min_idle_workers: 1
+        payload_schema:
+          type: object
+          required:
+            - text
+          properties:
+            text:
+              type: string
+
+      - name: sandbox
+        worker_image: kqueue/sandbox-worker:latest
+        image_pull_policy: Never
+        replicas:
+          min: 1
+          max: 5
+        resources:
+          cpu_request: "100m"
+          cpu_limit: "1000m"
+          memory_request: "64Mi"
+          memory_limit: "512Mi"
+        max_retries: 1
+        processing_timeout: 60s
+        scale_strategy:
+          type: threshold
+          scale_up_threshold: 5
+          scale_down_threshold: 1
+          cooldown_seconds: 30
+        payload_schema:
+          type: object
+          required:
+            - action
+          properties:
+            action:
+              type: string
+              enum: ["exec", "eval", "script"]
+
+      - name: codereview
+        worker_image: kqueue/codereview-worker:latest
+        image_pull_policy: Never
+        worker_env:
+          OPENCLAUDE_PROVIDER: ollama
+          OPENCLAUDE_MODEL: llama3.2
+          OLLAMA_URL: "http://host.docker.internal:11434"
+          OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+          OPENAI_BASE_URL: "http://host.docker.internal:11434/v1"
+          OPENAI_MODEL: llama3.2
+          GITHUB_TOKEN: ""
+          POST_REVIEWS: "true"
+        replicas:
+          min: 1
+          max: 3
+        resources:
+          cpu_request: "100m"
+          cpu_limit: "500m"
+          memory_request: "128Mi"
+          memory_limit: "512Mi"
+        max_retries: 2
+        processing_timeout: 300s
+        scale_strategy:
+          type: target_per_worker
+          target_per_worker: 2
+          cooldown_seconds: 60
+          startup_cost_seconds: 10
+          min_idle_workers: 1
+        payload_schema:
+          type: object
+          required:
+            - action
+            - repo_owner
+            - repo_name
+          properties:
+            action:
+              type: string
+              enum: ["review_pr", "review_push"]
 
     metrics:
       enabled: true
@@ -127,8 +204,16 @@ spec:
       containers:
         - name: controller
           image: kqueue/controller:latest
+          imagePullPolicy: Never
           args:
             - "--config=/etc/kqueue/config.yaml"
+          env:
+            - name: KQUEUE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: KQUEUE_SIDECAR_IMAGE
+              value: kqueue/sidecar:latest
           ports:
             - containerPort: 8080
               name: api
