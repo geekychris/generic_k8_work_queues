@@ -120,19 +120,22 @@ services:
       controller:
         condition: service_started
 
-  # Code review worker -- calls Ollama on the host for LLM-powered review.
-  # Uses host networking so it can reach ollama on localhost:11434.
+  # Code review worker -- uses openclaude to review PRs via Ollama on the host.
+  # Set GITHUB_TOKEN to enable: fetching PR data, cloning repos, posting reviews.
   # Ollama must be running on the host: ollama serve
-  # Ollama must listen on 0.0.0.0 for Docker containers to reach it.
-  # Set OLLAMA_HOST=0.0.0.0 on the host and restart ollama, or run:
-  #   OLLAMA_HOST=0.0.0.0 ollama serve
   codereview-worker:
     build:
       context: ./examples/codereview-worker
       dockerfile: Dockerfile
     environment:
+      - OPENCLAUDE_PROVIDER=ollama
+      - OPENCLAUDE_MODEL=llama3.2
       - OLLAMA_URL=http://host.docker.internal:11434
-      - OLLAMA_MODEL=llama3.2
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OPENAI_BASE_URL=http://host.docker.internal:11434/v1
+      - OPENAI_MODEL=llama3.2
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - POST_REVIEWS=${POST_REVIEWS:-true}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 5s

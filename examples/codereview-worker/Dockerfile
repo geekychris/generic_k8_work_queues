@@ -5,9 +5,13 @@ RUN go mod init codereview-worker
 COPY main.go .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o codereview-worker main.go
 
-FROM alpine:3.20
+FROM node:22-alpine
 
 RUN apk --no-cache add ca-certificates git
+
+# Install openclaude globally
+RUN npm install -g @gitlawb/openclaude
+
 COPY --from=builder /app/codereview-worker /usr/local/bin/codereview-worker
 
 EXPOSE 8080

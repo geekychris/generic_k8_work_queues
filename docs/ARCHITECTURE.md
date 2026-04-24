@@ -1621,6 +1621,7 @@ sequenceDiagram
     participant NATS as NATS JetStream
     participant SC as Codereview Sidecar
     participant CW as Codereview Worker
+    participant OC as openclaude CLI
     participant OL as Ollama (host)<br/>:11434
 
     GH->>WH: POST /webhook/github<br/>or POST /webhook/test
@@ -1629,8 +1630,10 @@ sequenceDiagram
     SC->>NATS: Fetch message
     SC->>CW: POST /process
     CW->>CW: Build review prompt from diff
-    CW->>OL: POST /api/chat (llama3.2)
-    OL-->>CW: LLM review text
+    CW->>OC: openclaude -p --provider ollama<br/>stdin: prompt
+    OC->>OL: LLM inference
+    OL-->>OC: Response tokens
+    OC-->>CW: JSON result (review, tokens, cost)
     CW-->>SC: {success, result, logs}
     SC->>NATS: Ack + publish status + logs
     NATS->>Ctrl: Status & log events
@@ -1641,10 +1644,16 @@ sequenceDiagram
 | Component | Location | Port | Description |
 |-----------|----------|------|-------------|
 | Webhook service | `cmd/webhook/` | 9000 | Receives GitHub webhooks, parses PR/push events, submits jobs to KQueue |
-| Codereview worker | `examples/codereview-worker/` | 8080 | Builds a review prompt from the diff, calls Ollama, returns the review |
-| Ollama | Host machine | 11434 | Local LLM inference (not containerized) |
+| Codereview worker | `examples/codereview-worker/` | 8080 | Builds a review prompt from the diff, calls openclaude, returns the review |
+| openclaude | Installed in worker container | -- | CLI that connects to LLM providers (ollama, anthropic, openai, etc.) |
+| Ollama | Host machine | 11434 | Local LLM inference backend (not containerized) |
 
 ### 8.3 Prerequisites
+
+The codereview worker uses [openclaude](https://github.com/Gitlawb/openclaude)
+as its LLM interface. openclaude is installed inside the worker container
+automatically -- you don't need to install it on the host. But you do need a
+model backend running.
 
 **Ollama must be running on the host machine:**
 
@@ -1659,11 +1668,12 @@ ollama pull llama3.2
 curl http://localhost:11434/api/tags
 ```
 
-The codereview worker connects to Ollama via `host.docker.internal:11434`.
-On **Rancher Desktop** this works automatically via DNS. On **Docker Desktop
-for Mac/Windows** it also works out of the box. On **Linux** you may need to
-add `extra_hosts: ["host.docker.internal:host-gateway"]` to the
-codereview-worker service in docker-compose.yaml.
+The worker container connects to Ollama on the host via
+`host.docker.internal:11434`. On **Rancher Desktop** this works automatically
+via built-in DNS. On **Docker Desktop for Mac/Windows** it also works out of
+the box. On **Linux** you may need to add
+`extra_hosts: ["host.docker.internal:host-gateway"]` to the codereview-worker
+service in docker-compose.yaml.
 
 **If ollama is bound to localhost only** (the default), Docker containers on
 some setups cannot reach it. Check with:
@@ -1678,16 +1688,41 @@ If it shows `localhost:11434` and containers can't connect, restart with:
 OLLAMA_HOST=0.0.0.0 ollama serve
 ```
 
-**Changing the model:** set the `OLLAMA_MODEL` environment variable on the
-codereview-worker service in docker-compose.yaml. Any model available in
-your local Ollama works. Good options:
+**How openclaude is used:**
 
-| Model | Size | Speed | Quality |
-|-------|------|-------|---------|
-| `llama3.2` | 3B | Fast (~5s) | Good for basic reviews |
-| `llama3.1` | 8B | Medium (~15s) | Better analysis |
-| `qwen2.5-coder:7b` | 7B | Medium (~12s) | Optimized for code |
-| `deepseek-coder:33b` | 33B | Slow (~60s) | Best code understanding |
+The worker shells out to openclaude in non-interactive mode:
+
+```bash
+openclaude -p --bare --provider ollama --model llama3.2 \
+  --output-format json --no-session-persistence < prompt.txt
+```
+
+This returns structured JSON with the review text, token usage, cost, and
+timing. The worker parses this and includes it in the job result and logs.
+
+**Changing the provider or model:** set environment variables on the
+codereview-worker service in docker-compose.yaml:
+
+```yaml
+environment:
+  - OPENCLAUDE_PROVIDER=ollama      # or: anthropic, openai, gemini, github
+  - OPENCLAUDE_MODEL=llama3.2       # any model available to the provider
+  - OLLAMA_URL=http://host.docker.internal:11434
+```
+
+openclaude supports multiple providers. To use Anthropic's Claude API instead
+of local Ollama, set `OPENCLAUDE_PROVIDER=anthropic` and ensure
+`ANTHROPIC_API_KEY` is set.
+
+**Model recommendations for code review:**
+
+| Model | Size | Speed | Quality | Provider |
+|-------|------|-------|---------|----------|
+| `llama3.2` | 3B | Fast (~5s) | Good for basic reviews | ollama |
+| `llama3.1` | 8B | Medium (~15s) | Better analysis | ollama |
+| `qwen2.5-coder:7b` | 7B | Medium (~12s) | Optimized for code | ollama |
+| `deepseek-coder:33b` | 33B | Slow (~60s) | Best code understanding | ollama |
+| `claude-sonnet-4-6` | -- | Fast (~5s) | Excellent code review | anthropic |
 
 ### 8.4 Running a Code Review
 

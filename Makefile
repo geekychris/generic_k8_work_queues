@@ -50,6 +50,18 @@ submit-sandbox:
 		-H 'Content-Type: application/json' \
 		-d '{"queue":"sandbox","payload":{"action":"exec","command":"echo hello from sandbox && uname -a && date"}}' | python3 -m json.tool
 
+## submit-review-pr: Submit a real PR for review (usage: make submit-review-pr OWNER=foo REPO=bar PR=123)
+submit-review-pr:
+	@if [ -z "$(OWNER)" ] || [ -z "$(REPO)" ] || [ -z "$(PR)" ]; then \
+		echo "Usage: make submit-review-pr OWNER=<owner> REPO=<repo> PR=<number>"; \
+		echo "Example: make submit-review-pr OWNER=octocat REPO=hello-world PR=42"; \
+		exit 1; \
+	fi
+	@curl -s -X POST http://localhost:9000/webhook/test \
+		-H 'Content-Type: application/json' \
+		-d '{"action":"review_pr","repo_owner":"$(OWNER)","repo_name":"$(REPO)","pr_number":$(PR),"clone_url":"https://github.com/$(OWNER)/$(REPO).git","sender":"kqueue-reviewer"}' \
+		| python3 -m json.tool
+
 ## submit-review: Submit a test code review via the webhook service
 submit-review:
 	@curl -s -X POST http://localhost:9000/webhook/test \
