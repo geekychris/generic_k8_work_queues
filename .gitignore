@@ -1,0 +1,39 @@
+# Go binaries
+bin/
+controller
+sidecar
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test artifacts
+*.test
+*.out
+coverage.html
+coverage.txt
+
+# Go module cache (vendor not committed)
+vendor/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker
+.docker/
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+
+# OS files
+Thumbs.db

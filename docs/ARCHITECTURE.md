@@ -1602,3 +1602,213 @@ metrics:
   enabled: true                     # bool     -- enable Prometheus metrics (default: true)
   port: 9090                        # int      -- dedicated metrics port (default: 9090)
 ```
+
+---
+
+## 8. Code Review System
+
+KQueue includes a working LLM-powered code review pipeline as an example of a
+real-world job. It receives GitHub webhook events, queues them as review jobs,
+and uses a local Ollama instance to produce code review comments.
+
+### 8.1 Architecture
+
+```mermaid
+sequenceDiagram
+    participant GH as GitHub / Test Client
+    participant WH as Webhook Service<br/>:9000
+    participant Ctrl as KQueue Controller<br/>:8080
+    participant NATS as NATS JetStream
+    participant SC as Codereview Sidecar
+    participant CW as Codereview Worker
+    participant OL as Ollama (host)<br/>:11434
+
+    GH->>WH: POST /webhook/github<br/>or POST /webhook/test
+    WH->>Ctrl: POST /api/v1/jobs<br/>{queue: codereview, payload: ...}
+    Ctrl->>NATS: Publish to kqueue.codereview
+    SC->>NATS: Fetch message
+    SC->>CW: POST /process
+    CW->>CW: Build review prompt from diff
+    CW->>OL: POST /api/chat (llama3.2)
+    OL-->>CW: LLM review text
+    CW-->>SC: {success, result, logs}
+    SC->>NATS: Ack + publish status + logs
+    NATS->>Ctrl: Status & log events
+```
+
+### 8.2 Components
+
+| Component | Location | Port | Description |
+|-----------|----------|------|-------------|
+| Webhook service | `cmd/webhook/` | 9000 | Receives GitHub webhooks, parses PR/push events, submits jobs to KQueue |
+| Codereview worker | `examples/codereview-worker/` | 8080 | Builds a review prompt from the diff, calls Ollama, returns the review |
+| Ollama | Host machine | 11434 | Local LLM inference (not containerized) |
+
+### 8.3 Prerequisites
+
+**Ollama must be running on the host machine:**
+
+```bash
+# Install ollama (if not already installed)
+# See https://ollama.com/download
+
+# Pull a model
+ollama pull llama3.2
+
+# Verify it's running
+curl http://localhost:11434/api/tags
+```
+
+The codereview worker connects to Ollama via `host.docker.internal:11434`.
+On **Rancher Desktop** this works automatically via DNS. On **Docker Desktop
+for Mac/Windows** it also works out of the box. On **Linux** you may need to
+add `extra_hosts: ["host.docker.internal:host-gateway"]` to the
+codereview-worker service in docker-compose.yaml.
+
+**If ollama is bound to localhost only** (the default), Docker containers on
+some setups cannot reach it. Check with:
+
+```bash
+lsof -i :11434
+```
+
+If it shows `localhost:11434` and containers can't connect, restart with:
+
+```bash
+OLLAMA_HOST=0.0.0.0 ollama serve
+```
+
+**Changing the model:** set the `OLLAMA_MODEL` environment variable on the
+codereview-worker service in docker-compose.yaml. Any model available in
+your local Ollama works. Good options:
+
+| Model | Size | Speed | Quality |
+|-------|------|-------|---------|
+| `llama3.2` | 3B | Fast (~5s) | Good for basic reviews |
+| `llama3.1` | 8B | Medium (~15s) | Better analysis |
+| `qwen2.5-coder:7b` | 7B | Medium (~12s) | Optimized for code |
+| `deepseek-coder:33b` | 33B | Slow (~60s) | Best code understanding |
+
+### 8.4 Running a Code Review
+
+**Start the services:**
+
+```bash
+make docker-build
+make docker-up
+```
+
+**Submit a test review (no GitHub required):**
+
+```bash
+make submit-review
+```
+
+This sends a realistic PR payload to `POST localhost:9000/webhook/test` with
+sample JWT authentication code and diffs. The webhook service forwards it to
+KQueue, which queues it for the codereview worker.
+
+**Submit a custom review:**
+
+```bash
+curl -X POST http://localhost:9000/webhook/test \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "repo_owner": "myorg",
+    "repo_name": "myrepo",
+    "pr_number": 123,
+    "pr_title": "Refactor database layer",
+    "pr_body": "Switches from raw SQL to sqlx for type safety.",
+    "sender": "alice",
+    "ref": "feature/sqlx",
+    "files_changed": [
+      {
+        "filename": "db/queries.go",
+        "status": "modified",
+        "patch": "@@ -10,5 +10,5 @@\n-rows, _ := db.Query(\"SELECT * FROM users\")\n+var users []User\n+err := db.Select(&users, \"SELECT * FROM users\")"
+      }
+    ]
+  }'
+```
+
+**Check the result:**
+
+```bash
+# Get the job_id from the submit response, then:
+curl http://localhost:8080/api/v1/jobs/<job_id> | python3 -m json.tool
+
+# View the per-job logs (includes the full LLM output):
+curl http://localhost:8080/api/v1/jobs/<job_id>/logs | python3 -m json.tool
+```
+
+Or open the UI at http://localhost:8080, click the **codereview** queue card,
+click a job row, and switch to the **Logs** tab to see the full review.
+
+### 8.5 Connecting to Real GitHub Webhooks
+
+To receive real PR/push events from GitHub:
+
+1. Expose port 9000 to the internet (e.g., with ngrok):
+   ```bash
+   ngrok http 9000
+   ```
+
+2. In your GitHub repository: **Settings > Webhooks > Add webhook**
+   - **Payload URL**: `https://<your-ngrok-url>/webhook/github`
+   - **Content type**: `application/json`
+   - **Secret**: set a secret and add `WEBHOOK_SECRET=<same-secret>` to the
+     webhook service in docker-compose.yaml
+   - **Events**: select "Pull requests" and "Pushes"
+
+3. The webhook service validates the HMAC-SHA256 signature, parses the event,
+   and queues a review job. Supported events:
+   - `pull_request` (actions: `opened`, `synchronize`) -- queues a PR review
+   - `push` -- queues a push review with the list of changed files
+   - `ping` -- responds with `{"status":"pong"}`
+
+**Note:** GitHub PR webhooks include metadata (title, body, file list) but
+not the actual diffs. For full diff-based reviews, the worker would need to
+clone the repo (the `cloneRepoPlaceholder` function is ready for this). The
+test endpoint allows you to include `files_changed` with `patch` data directly.
+
+### 8.6 Worker Logging
+
+The codereview worker demonstrates the **worker log forwarding** pattern.
+Workers can include a `logs` array in their response:
+
+```json
+{
+  "success": true,
+  "result": { ... },
+  "logs": [
+    {"level": "info", "message": "Starting review of 3 files"},
+    {"level": "info", "message": "Calling Ollama (llama3.2)..."},
+    {"level": "info", "message": "--- LLM Review Output ---"},
+    {"level": "info", "message": "The changes look good overall..."},
+    {"level": "info", "message": "--- End Review Output ---"}
+  ]
+}
+```
+
+The sidecar forwards these to the controller via NATS (`kqueue.logs.<queue>`),
+where they appear in the per-job log store. Each entry is prefixed with
+`[worker]` to distinguish worker logs from sidecar logs.
+
+This pattern works for any worker -- not just the codereview worker. Any
+worker that returns a `logs` array in its `ProcessResponse` will have those
+logs forwarded and visible via the API and UI.
+
+### 8.7 Future Improvements
+
+The current implementation is a working prototype. Planned enhancements:
+
+- **Git clone**: the `cloneRepoPlaceholder` function has commented code ready
+  for `git clone --depth=1`. This would allow the worker to read full files,
+  not just diffs.
+- **GitHub API integration**: fetch PR diffs via the GitHub API instead of
+  relying on webhook payload data.
+- **Post review comments**: call the GitHub API to post review comments back
+  on the PR.
+- **Multi-file analysis**: analyze relationships between changed files for
+  more holistic reviews.
+- **Custom review rules**: configurable review criteria per repository.

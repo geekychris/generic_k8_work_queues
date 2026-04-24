@@ -96,6 +96,44 @@ queues:
         timeout:
           type: number
 
+  - name: codereview
+    subject: kqueue.codereview
+    worker_image: kqueue/codereview-worker:latest
+    replicas:
+      min: 1
+      max: 3
+    resources:
+      cpu_request: "100m"
+      cpu_limit: "500m"
+      memory_request: "128Mi"
+      memory_limit: "512Mi"
+    max_retries: 2
+    processing_timeout: 300s
+    scale_strategy:
+      type: target_per_worker
+      target_per_worker: 2
+      cooldown_seconds: 60
+      startup_cost_seconds: 10
+      min_idle_workers: 1
+    payload_schema:
+      type: object
+      required:
+        - action
+        - repo_owner
+        - repo_name
+      properties:
+        action:
+          type: string
+          enum: ["review_pr", "review_push"]
+        repo_owner:
+          type: string
+        repo_name:
+          type: string
+        pr_title:
+          type: string
+        sender:
+          type: string
+
 metrics:
   enabled: true
   port: 9090

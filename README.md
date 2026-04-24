@@ -55,6 +55,24 @@ make submit-batch
 | `echo` | [examples/echo-worker](examples/echo-worker/) | Go | Multi-action worker: echo, uppercase, count, sort, reverse, hash, delay. Accepts any JSON payload. |
 | `nlp` | [examples/nlp-worker](examples/nlp-worker/) | Python | NLP analysis: word count, sentence count, word frequency, text reversal. Requires `{"text":"..."}`. |
 | `sandbox` | [examples/sandbox-worker](examples/sandbox-worker/) | Go | Executes shell commands from payloads. Designed for gVisor sandboxing in Kubernetes. |
+| `codereview` | [examples/codereview-worker](examples/codereview-worker/) | Go | LLM-powered code review using Ollama. Receives PR diffs via webhook, produces review comments. |
+
+## Code Review System
+
+A complete LLM-powered code review pipeline that demonstrates a real-world KQueue use case. A webhook service receives GitHub PR/push events and queues them for review by a worker that calls Ollama.
+
+```bash
+# Requires: ollama running on the host with a model pulled
+ollama pull llama3.2
+
+# Submit a test review (no GitHub required):
+make submit-review
+
+# Check the result (includes full LLM review in per-job logs):
+curl http://localhost:8080/api/v1/jobs/<job_id>/logs | python3 -m json.tool
+```
+
+See [docs/ARCHITECTURE.md - Code Review System](docs/ARCHITECTURE.md#8-code-review-system) for full details on setup, connecting to GitHub webhooks, model selection, and the worker log forwarding pattern.
 
 ## API
 
@@ -99,6 +117,7 @@ See [docs/ARCHITECTURE.md - Implementing a New Worker](docs/ARCHITECTURE.md#3-im
 - [gVisor Sandboxing](docs/ARCHITECTURE.md#sandboxed-execution-with-gvisor) -- how it works, requirements, performance tradeoffs, verification
 - [Implementing a New Worker](docs/ARCHITECTURE.md#3-implementing-a-new-worker) -- step-by-step guide with Go and Python examples
 - [Debugging Guide](docs/ARCHITECTURE.md#6-debugging-guide) -- common issues, inspecting NATS, logs, metrics
+- [Code Review System](docs/ARCHITECTURE.md#8-code-review-system) -- LLM-powered reviews, Ollama setup, GitHub webhooks, worker log forwarding
 - [Configuration Reference](docs/ARCHITECTURE.md#7-configuration-reference) -- every config field documented
 
 ## Project Structure
@@ -106,6 +125,7 @@ See [docs/ARCHITECTURE.md - Implementing a New Worker](docs/ARCHITECTURE.md#3-im
 ```
 cmd/controller/         Controller service (API, autoscaler, UI)
 cmd/sidecar/            Worker sidecar (NATS fetch loop, retry logic)
+cmd/webhook/            GitHub webhook receiver (queues code review jobs)
 pkg/api/                Core types (Job, QueueConfig, ScaleStrategy)
 pkg/queue/              NATS JetStream queue manager
 pkg/scaler/             Autoscaler with three strategies + cost-aware scaling
@@ -117,6 +137,7 @@ ui/static/              Web dashboard (single-file HTML, no build step)
 examples/echo-worker/   Go multi-action example worker
 examples/nlp-worker/    Python Flask NLP worker
 examples/sandbox-worker/ Go shell execution worker (for gVisor)
+examples/codereview-worker/ LLM code review worker (calls Ollama)
 deploy/minimal/         Kubernetes manifests - core only (NATS + controller, no example queues)
 deploy/base/            Kubernetes manifests - full (NATS + controller + example queues)
 deploy/examples/        Example configs and gVisor RuntimeClass

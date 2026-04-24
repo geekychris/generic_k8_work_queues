@@ -119,3 +119,60 @@ services:
         condition: service_healthy
       controller:
         condition: service_started
+
+  # Code review worker -- calls Ollama on the host for LLM-powered review.
+  # Uses host networking so it can reach ollama on localhost:11434.
+  # Ollama must be running on the host: ollama serve
+  # Ollama must listen on 0.0.0.0 for Docker containers to reach it.
+  # Set OLLAMA_HOST=0.0.0.0 on the host and restart ollama, or run:
+  #   OLLAMA_HOST=0.0.0.0 ollama serve
+  codereview-worker:
+    build:
+      context: ./examples/codereview-worker
+      dockerfile: Dockerfile
+    environment:
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=llama3.2
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  codereview-sidecar:
+    build:
+      context: .
+      dockerfile: Dockerfile.sidecar
+    environment:
+      - NATS_URL=nats://nats:4222
+      - QUEUE_NAME=codereview
+      - QUEUE_SUBJECT=kqueue.codereview
+      - WORKER_URL=http://codereview-worker:8080/process
+      - MAX_RETRIES=2
+      - STREAM_PREFIX=kqueue
+    depends_on:
+      codereview-worker:
+        condition: service_healthy
+      controller:
+        condition: service_started
+
+  # GitHub webhook receiver -- listens for PR/push events and queues review jobs.
+  # Port 9000 is exposed for receiving webhooks.
+  webhook:
+    build:
+      context: .
+      dockerfile: Dockerfile.webhook
+    ports:
+      - "9000:9000"
+    environment:
+      - KQUEUE_URL=http://controller:8080
+      - QUEUE_NAME=codereview
+      - WEBHOOK_PORT=9000
+      # Set WEBHOOK_SECRET to match your GitHub webhook secret for signature validation
+      # - WEBHOOK_SECRET=your-secret-here
+    depends_on:
+      controller:
+        condition: service_started

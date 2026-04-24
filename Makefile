@@ -1,5 +1,5 @@
 .PHONY: build docker-build docker-up docker-down test test-integration test-e2e \
-       submit-echo submit-nlp submit-sandbox submit-batch status logs clean help
+       submit-echo submit-nlp submit-sandbox submit-review submit-batch status logs clean help
 
 CONTROLLER_URL ?= http://localhost:8080
 
@@ -49,6 +49,25 @@ submit-sandbox:
 	@curl -s -X POST $(CONTROLLER_URL)/api/v1/jobs \
 		-H 'Content-Type: application/json' \
 		-d '{"queue":"sandbox","payload":{"action":"exec","command":"echo hello from sandbox && uname -a && date"}}' | python3 -m json.tool
+
+## submit-review: Submit a test code review via the webhook service
+submit-review:
+	@curl -s -X POST http://localhost:9000/webhook/test \
+		-H 'Content-Type: application/json' \
+		-d '{ \
+			"repo_owner": "octocat", \
+			"repo_name": "hello-world", \
+			"pr_number": 42, \
+			"pr_title": "Add user authentication", \
+			"pr_body": "This PR adds JWT-based authentication to the API endpoints.", \
+			"sender": "developer", \
+			"ref": "feature/auth", \
+			"files_changed": [ \
+				{"filename": "auth/jwt.go", "status": "added", "patch": "+package auth\n+\n+import (\n+\t\"time\"\n+\t\"github.com/golang-jwt/jwt/v5\"\n+)\n+\n+func GenerateToken(userID string, secret []byte) (string, error) {\n+\ttoken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{\n+\t\t\"user_id\": userID,\n+\t\t\"exp\": time.Now().Add(24 * time.Hour).Unix(),\n+\t})\n+\treturn token.SignedString(secret)\n+}"}, \
+				{"filename": "middleware/auth.go", "status": "added", "patch": "+package middleware\n+\n+func AuthRequired(next http.Handler) http.Handler {\n+\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\ttoken := r.Header.Get(\"Authorization\")\n+\t\tif token == \"\" {\n+\t\t\thttp.Error(w, \"unauthorized\", 401)\n+\t\t\treturn\n+\t\t}\n+\t\tnext.ServeHTTP(w, r)\n+\t})\n+}"}, \
+				{"filename": "main.go", "status": "modified", "patch": "@@ -15,6 +15,7 @@\n import (\n \t\"net/http\"\n+\t\"myapp/middleware\"\n )\n@@ -28,6 +29,7 @@\n \tr := chi.NewRouter()\n+\tr.Use(middleware.AuthRequired)\n \tr.Get(\"/api/users\", listUsers)"} \
+			] \
+		}' | python3 -m json.tool
 
 ## submit-batch: Submit 20 echo jobs rapidly to test scaling
 submit-batch:
