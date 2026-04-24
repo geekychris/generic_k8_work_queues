@@ -27,20 +27,8 @@ queues:
       cooldown_seconds: 30
       scale_up_step: 2
       scale_down_step: 1
-    payload_schema:
-      type: object
-      required:
-        - action
-      properties:
-        action:
-          type: string
-          enum: ["echo", "uppercase", "count", "sort", "reverse", "hash", "delay"]
-        text:
-          type: string
-        items:
-          type: array
-        ms:
-          type: number
+    # Echo accepts any JSON payload. If "action" is present, it dispatches.
+    # No schema = no validation, accepts anything.
 
   - name: nlp
     subject: kqueue.nlp

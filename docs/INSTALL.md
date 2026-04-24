@@ -1,16 +1,19 @@
-# KQueue Installation Guide
+# KQueue Installation & Quick Start
 
 ## Prerequisites
 
-- **Go 1.21+** (for building from source)
-- **Docker** and **Docker Compose** (v2)
-- **kubectl** (for Kubernetes deployment)
-- **kind** or **minikube** (for local Kubernetes cluster)
-- **curl** (for interacting with the API)
+| Tool | Version | Required For |
+|------|---------|-------------|
+| Go | 1.26+ | Building from source |
+| Docker | 20+ | Building images, running locally |
+| Docker Compose | v2 | Local development |
+| kubectl | 1.28+ | Kubernetes deployment |
+| kind or minikube | latest | Local Kubernetes cluster |
+| curl | any | API interaction |
 
-## Quick Start with Docker Compose
+## Quick Start (docker-compose)
 
-The fastest way to run KQueue locally. No Kubernetes cluster required.
+Five commands to a running system:
 
 ```bash
 # 1. Clone the repository
@@ -23,152 +26,176 @@ make docker-build
 # 3. Start all services
 make docker-up
 
-# 4. Verify everything is running
+# 4. Check status
 make status
 
 # 5. Submit a test job
 make submit-echo
 ```
 
-The web dashboard is available at http://localhost:8080. NATS monitoring is at
-http://localhost:8222.
+This starts NATS, the controller, three workers (echo, nlp, sandbox), and their
+sidecars.
 
-To stop everything:
+**What is running:**
+
+| URL | Service |
+|-----|---------|
+| http://localhost:8080 | Web dashboard + REST API |
+| http://localhost:4222 | NATS client port |
+| http://localhost:8222 | NATS monitoring dashboard |
+
+## Verify It Works
+
+**Submit a job and check its status:**
 
 ```bash
-make docker-down
+# Submit an echo job
+curl -s -X POST http://localhost:8080/api/v1/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"queue":"echo","payload":{"action":"uppercase","text":"hello world"}}' \
+  | python3 -m json.tool
+
+# Note the job_id from the response, then check status:
+curl -s http://localhost:8080/api/v1/jobs/<job_id> | python3 -m json.tool
+
+# View per-job logs:
+curl -s http://localhost:8080/api/v1/jobs/<job_id>/logs | python3 -m json.tool
+
+# Check queue stats:
+curl -s http://localhost:8080/api/v1/queues | python3 -m json.tool
 ```
 
-To stop and remove all data volumes:
+**Open the dashboard**: visit http://localhost:8080 in a browser.
+
+**Submit a batch to test scaling:**
 
 ```bash
-make clean
+make submit-batch    # Submits 20 echo jobs
+make status          # Watch pending/completed counts
 ```
 
-## Kubernetes Deployment with kind
+**Stop everything:**
 
-### 1. Create a kind cluster
+```bash
+make docker-down     # Stop containers
+make clean           # Stop + remove volumes + build artifacts
+```
+
+## Kubernetes Deployment (with kind)
+
+### Step 1: Create a cluster
 
 ```bash
 kind create cluster --name kqueue
 ```
 
-### 2. Build and load images
+### Step 2: Build and load images
 
 ```bash
 make docker-build
 
 kind load docker-image kqueue-controller:latest --name kqueue
 kind load docker-image kqueue-sidecar:latest --name kqueue
+# Only if using the example queues:
 kind load docker-image kqueue/echo-worker:latest --name kqueue
 kind load docker-image kqueue/nlp-worker:latest --name kqueue
 ```
 
-### 3. Apply Kubernetes manifests
+### Step 3: Deploy
+
+**Option A -- Minimal (no example queues):**
+
+```bash
+kubectl apply -k deploy/minimal/
+```
+
+This deploys only NATS and the controller with an empty queue config. Then edit
+the ConfigMap to add your own queues:
+
+```bash
+kubectl -n kqueue edit configmap kqueue-config
+kubectl -n kqueue rollout restart deployment kqueue-controller
+```
+
+**Option B -- Full (with echo/nlp example queues):**
 
 ```bash
 kubectl apply -k deploy/base/
 ```
 
-This creates the `kqueue` namespace and deploys NATS and the controller with
-appropriate RBAC.
+Both options create:
+- `kqueue` namespace
+- NATS StatefulSet with JetStream and persistent storage
+- KQueue controller Deployment with RBAC
+- ConfigMap with queue definitions (empty for minimal, examples for full)
 
-### 4. Verify the deployment
+### Step 4: Wait for pods to be ready
 
 ```bash
-kubectl -n kqueue get pods
-kubectl -n kqueue logs deployment/kqueue-controller
+kubectl -n kqueue get pods -w
 ```
 
-### 5. Port-forward to access the API
+Wait until all pods show `Running` and `Ready`.
+
+### Step 5: Access the API
 
 ```bash
 kubectl -n kqueue port-forward svc/kqueue-controller 8080:8080
 ```
 
-Then submit jobs as usual:
+In another terminal:
 
 ```bash
+curl -s http://localhost:8080/api/v1/queues | python3 -m json.tool
 curl -s -X POST http://localhost:8080/api/v1/jobs \
   -H 'Content-Type: application/json' \
-  -d '{"queue":"echo","payload":{"message":"hello k8s"}}'
+  -d '{"queue":"echo","payload":{"action":"echo","text":"hello from k8s"}}'
 ```
+
+### Step 6 (optional): gVisor for sandbox workers
+
+If your nodes have gVisor installed:
+
+```bash
+kubectl apply -f deploy/examples/gvisor-runtimeclass.yaml
+```
+
+## Running Tests
+
+```bash
+# Unit tests -- autoscaler strategies, cost-aware scaling, config loading
+# No external dependencies required
+make test
+
+# Integration tests -- HTTP API handlers (submit, get, list, validation)
+# No NATS required
+make test-integration
+
+# End-to-end tests -- full request lifecycle against running services
+# Requires: make docker-up
+make test-e2e
+```
+
+For details on what each suite covers, running individual tests, and debugging
+failures, see [Architecture - Running Tests](ARCHITECTURE.md#53-running-tests).
 
 ## Building from Source
 
 ```bash
 # Build Go binaries
 make build
+# -> bin/controller, bin/sidecar
 
-# Binaries are placed in bin/
-ls bin/
-# controller  sidecar
-
-# Run the controller locally (requires a running NATS server)
-./bin/controller -config deploy/examples/config.yaml --local
-```
-
-To run NATS separately for development:
-
-```bash
+# Run the controller locally (needs a running NATS server)
 docker run -d --name nats -p 4222:4222 -p 8222:8222 nats:2.10-alpine -js -m 8222
+./bin/controller -config docker-compose.config.yaml --local
 ```
 
-## Configuration
+## Creating Your First Custom Worker
 
-KQueue is configured via a single YAML file passed with the `-config` flag.
-See `deploy/examples/config.yaml` for a full example and `docs/ARCHITECTURE.md`
-for a complete reference of all options.
+### Minimal Go Worker
 
-Key settings:
-
-| Section | Key | Default | Description |
-|---------|-----|---------|-------------|
-| `server.port` | int | 8080 | HTTP listen port |
-| `server.ui_enabled` | bool | true | Serve the web dashboard |
-| `nats.url` | string | `nats://nats:4222` | NATS server URL |
-| `nats.stream_prefix` | string | `kqueue` | Prefix for JetStream stream names |
-| `metrics.enabled` | bool | true | Enable Prometheus metrics |
-| `metrics.port` | int | 9090 | Dedicated metrics port |
-
-Queue-level settings are documented in `docs/ARCHITECTURE.md`.
-
-## Creating a Custom Worker
-
-Workers are simple HTTP servers. They must implement two endpoints:
-
-### 1. Health check
-
-```
-GET /health  ->  200 OK  {"status":"ok"}
-```
-
-### 2. Process endpoint
-
-```
-POST /process
-Content-Type: application/json
-
-{
-  "job_id": "uuid-string",
-  "payload": { ... arbitrary JSON ... }
-}
-```
-
-Response:
-
-```json
-{
-  "success": true,
-  "result": { ... },
-  "error": ""
-}
-```
-
-Return `"success": false` with an `"error"` message to signal failure. The
-sidecar will retry up to `max_retries` times.
-
-### Example: minimal Go worker
+Create `my-worker/main.go`:
 
 ```go
 package main
@@ -179,24 +206,33 @@ import (
     "net/http"
 )
 
+type Request struct {
+    JobID   string          `json:"job_id"`
+    Payload json.RawMessage `json:"payload"`
+}
+
+type Response struct {
+    Success bool        `json:"success"`
+    Result  interface{} `json:"result,omitempty"`
+    Error   string      `json:"error,omitempty"`
+}
+
 func main() {
     http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
         w.Write([]byte(`{"status":"ok"}`))
     })
 
     http.HandleFunc("/process", func(w http.ResponseWriter, r *http.Request) {
-        var req struct {
-            JobID   string          `json:"job_id"`
-            Payload json.RawMessage `json:"payload"`
-        }
+        var req Request
         json.NewDecoder(r.Body).Decode(&req)
 
-        // --- your processing logic here ---
+        // Your processing logic here.
+        log.Printf("processing job %s", req.JobID)
 
         w.Header().Set("Content-Type", "application/json")
-        json.NewEncoder(w).Encode(map[string]interface{}{
-            "success": true,
-            "result":  map[string]string{"echo": string(req.Payload)},
+        json.NewEncoder(w).Encode(Response{
+            Success: true,
+            Result:  map[string]string{"status": "done", "payload": string(req.Payload)},
         })
     })
 
@@ -204,7 +240,23 @@ func main() {
 }
 ```
 
-### Example: minimal Python worker
+Create `my-worker/Dockerfile`:
+
+```dockerfile
+FROM golang:1.23-alpine AS builder
+WORKDIR /app
+COPY . .
+RUN CGO_ENABLED=0 go build -o worker .
+
+FROM alpine:3.20
+COPY --from=builder /app/worker /usr/local/bin/worker
+EXPOSE 8080
+ENTRYPOINT ["worker"]
+```
+
+### Minimal Python Worker
+
+Create `my-worker/main.py`:
 
 ```python
 from flask import Flask, request, jsonify
@@ -221,35 +273,33 @@ def process():
     job_id = data["job_id"]
     payload = data["payload"]
 
-    # --- your processing logic here ---
+    # Your processing logic here.
+    app.logger.info("processing job %s", job_id)
 
-    return jsonify(success=True, result={"received": payload})
+    return jsonify(success=True, result={"status": "done", "input": payload})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
 ```
 
-### 3. Create a Dockerfile
+Create `my-worker/Dockerfile`:
 
 ```dockerfile
-FROM golang:1.23-alpine AS builder
+FROM python:3.12-slim
 WORKDIR /app
+RUN pip install flask
 COPY . .
-RUN CGO_ENABLED=0 go build -o worker .
-
-FROM alpine:3.20
-COPY --from=builder /app/worker /usr/local/bin/worker
 EXPOSE 8080
-ENTRYPOINT ["worker"]
+CMD ["python", "main.py"]
 ```
 
-### 4. Add to configuration
+### Register the Worker
 
-Add an entry to your config YAML:
+Add to `docker-compose.config.yaml` (or your config YAML):
 
 ```yaml
 queues:
-  - name: my-worker
+  - name: my-queue
     worker_image: my-worker:latest
     replicas:
       min: 1
@@ -262,11 +312,11 @@ queues:
       scale_down_threshold: 2
 ```
 
-### 5. Add to docker-compose.yaml (for local dev)
+Add to `docker-compose.yaml`:
 
 ```yaml
   my-worker:
-    build: ./path/to/worker
+    build: ./my-worker
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 5s
@@ -280,13 +330,13 @@ queues:
     build:
       context: .
       dockerfile: Dockerfile.sidecar
-    network_mode: "service:my-worker"
     environment:
       - NATS_URL=nats://nats:4222
-      - QUEUE_NAME=my-worker
-      - QUEUE_SUBJECT=kqueue.my-worker
-      - WORKER_URL=http://localhost:8080/process
+      - QUEUE_NAME=my-queue
+      - QUEUE_SUBJECT=kqueue.my-queue
+      - WORKER_URL=http://my-worker:8080/process
       - MAX_RETRIES=3
+      - STREAM_PREFIX=kqueue
     depends_on:
       my-worker:
         condition: service_healthy
@@ -294,73 +344,29 @@ queues:
         condition: service_started
 ```
 
+Rebuild and restart:
+
+```bash
+make docker-build && make docker-up
+```
+
+Submit a job to your new queue:
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"queue":"my-queue","payload":{"hello":"world"}}'
+```
+
 ## Troubleshooting
 
-### Services fail to start
+| Problem | Solution |
+|---------|----------|
+| Sidecar shows "failed to get stream" | Controller has not created streams yet. Restart sidecar: `docker compose restart my-sidecar` |
+| Jobs stuck in pending | Check sidecar logs: `docker compose logs my-sidecar` |
+| NATS connection refused | Check NATS is running: `docker compose ps nats` |
+| Worker errors | Check worker logs: `docker compose logs my-worker` |
+| Port 8080 conflict | Stop conflicting service or change `server.port` in config |
+| K8s pods in CrashLoopBackOff | Check `kubectl -n kqueue describe pod <name>` and `kubectl -n kqueue logs <name> -c sidecar` |
 
-Check logs for connection errors:
-
-```bash
-docker compose logs controller
-docker compose logs echo-sidecar
-```
-
-The most common issue is the sidecar starting before NATS streams are created.
-The `depends_on` ordering in docker-compose.yaml handles this, but if you see
-"failed to get stream" errors, restart the sidecars:
-
-```bash
-docker compose restart echo-sidecar nlp-sidecar
-```
-
-### Jobs stuck in pending
-
-Verify the sidecar is running and connected:
-
-```bash
-docker compose logs echo-sidecar
-```
-
-Check that the NATS consumer exists:
-
-```bash
-curl -s http://localhost:8222/jsz?consumers=true | python3 -m json.tool
-```
-
-### NATS connection refused
-
-Ensure NATS is running and healthy:
-
-```bash
-docker compose ps nats
-curl http://localhost:8222/healthz
-```
-
-### Workers returning errors
-
-Check worker logs:
-
-```bash
-docker compose logs echo-worker
-docker compose logs nlp-worker
-```
-
-### Port conflicts
-
-If port 8080, 4222, or 8222 is already in use, either stop the conflicting
-service or override ports in docker-compose.yaml.
-
-### Kubernetes: pods in CrashLoopBackOff
-
-Check pod logs and events:
-
-```bash
-kubectl -n kqueue describe pod <pod-name>
-kubectl -n kqueue logs <pod-name> -c sidecar
-kubectl -n kqueue logs <pod-name> -c worker
-```
-
-Common causes:
-- NATS not reachable from the pod network
-- Worker image not available in the cluster (use `kind load` or push to a registry)
-- Incorrect RBAC -- the controller needs permissions to manage deployments
+For detailed debugging information, see `docs/ARCHITECTURE.md` section 6.

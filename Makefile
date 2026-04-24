@@ -1,5 +1,5 @@
 .PHONY: build docker-build docker-up docker-down test test-integration test-e2e \
-       submit-echo submit-nlp submit-batch status logs clean help
+       submit-echo submit-nlp submit-sandbox submit-batch status logs clean help
 
 CONTROLLER_URL ?= http://localhost:8080
 
@@ -43,6 +43,12 @@ submit-nlp:
 	@curl -s -X POST $(CONTROLLER_URL)/api/v1/jobs \
 		-H 'Content-Type: application/json' \
 		-d '{"queue":"nlp","payload":{"text":"The quick brown fox jumps over the lazy dog. Natural language processing is a subfield of linguistics and computer science."}}' | python3 -m json.tool
+
+## submit-sandbox: Submit a sample sandbox job (runs a shell command)
+submit-sandbox:
+	@curl -s -X POST $(CONTROLLER_URL)/api/v1/jobs \
+		-H 'Content-Type: application/json' \
+		-d '{"queue":"sandbox","payload":{"action":"exec","command":"echo hello from sandbox && uname -a && date"}}' | python3 -m json.tool
 
 ## submit-batch: Submit 20 echo jobs rapidly to test scaling
 submit-batch:
