@@ -1705,13 +1705,13 @@ codereview-worker service in docker-compose.yaml:
 
 ```yaml
 environment:
-  - OPENCLAUDE_PROVIDER=ollama      # or: anthropic, openai, gemini, github
-  - OPENCLAUDE_MODEL=llama3.2       # any model available to the provider
+  - LLM_PROVIDER=ollama      # or: anthropic, openai, gemini, github
+  - LLM_MODEL=llama3.2       # any model available to the provider
   - OLLAMA_URL=http://host.docker.internal:11434
 ```
 
 openclaude supports multiple providers. To use Anthropic's Claude API instead
-of local Ollama, set `OPENCLAUDE_PROVIDER=anthropic` and ensure
+of local Ollama, set `LLM_PROVIDER=anthropic` and ensure
 `ANTHROPIC_API_KEY` is set.
 
 **Model recommendations for code review:**

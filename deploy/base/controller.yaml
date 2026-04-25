@@ -142,8 +142,8 @@ data:
         worker_image: kqueue/codereview-worker:latest
         image_pull_policy: Never
         worker_env:
-          OPENCLAUDE_PROVIDER: ollama
-          OPENCLAUDE_MODEL: llama3.2
+          LLM_PROVIDER: ollama
+          LLM_MODEL: llama3.2
           OLLAMA_URL: "http://host.docker.internal:11434"
           OLLAMA_BASE_URL: "http://host.docker.internal:11434"
           OPENAI_BASE_URL: "http://host.docker.internal:11434/v1"

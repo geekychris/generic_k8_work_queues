@@ -68,8 +68,8 @@ if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
         "op": "replace",
         "path": "/spec/template/spec/containers/0/env",
         "value": [
-          {"name": "OPENCLAUDE_PROVIDER", "value": "anthropic"},
-          {"name": "OPENCLAUDE_MODEL", "value": "claude-sonnet-4-6"},
+          {"name": "LLM_PROVIDER", "value": "anthropic"},
+          {"name": "LLM_MODEL", "value": "claude-sonnet-4-6"},
           {"name": "ANTHROPIC_API_KEY", "valueFrom": {"secretKeyRef": {"name": "anthropic-key", "key": "key"}}},
           {"name": "POST_REVIEWS", "value": "true"},
           {"name": "GITHUB_TOKEN", "valueFrom": {"secretKeyRef": {"name": "github-token", "key": "token"}}}

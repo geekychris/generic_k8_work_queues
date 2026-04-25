@@ -117,9 +117,9 @@ type ReviewComment struct {
 	Suggestion string `json:"suggestion,omitempty"` // replacement code for the line(s)
 }
 
-// --- OpenClaude types ---
+// --- LLMCli types ---
 
-type OpenClaudeResult struct {
+type LLMCliResult struct {
 	Type       string  `json:"type"`
 	Result     string  `json:"result"`
 	IsError    bool    `json:"is_error"`
@@ -136,25 +136,25 @@ type OpenClaudeResult struct {
 // --- Globals ---
 
 var (
-	openclaudeBin   string
-	openclaudeModel string
-	provider        string
-	ollamaURL       string
-	githubToken     string
-	postReviews     bool
+	llmBin      string
+	llmModel    string
+	provider    string
+	ollamaURL   string
+	githubToken string
+	postReviews bool
 )
 
 func main() {
-	openclaudeBin = envOr("OPENCLAUDE_BIN", "openclaude")
-	openclaudeModel = envOr("OPENCLAUDE_MODEL", "llama3.2")
-	provider = envOr("OPENCLAUDE_PROVIDER", "ollama")
+	llmBin = envOr("LLM_CLI_BIN", "openclaude")
+	llmModel = envOr("LLM_MODEL", "llama3.2")
+	provider = envOr("LLM_PROVIDER", "ollama")
 	ollamaURL = envOr("OLLAMA_URL", "http://host.docker.internal:11434")
 	githubToken = os.Getenv("GITHUB_TOKEN")
 	postReviews = envOr("POST_REVIEWS", "true") == "true"
 	listenPort := envOr("PORT", "8080")
 
 	log.Printf("codereview-worker starting provider=%s model=%s github_token=%v post_reviews=%v port=%s",
-		provider, openclaudeModel, githubToken != "", postReviews, listenPort)
+		provider, llmModel, githubToken != "", postReviews, listenPort)
 
 	http.HandleFunc("/process", handleProcess)
 	http.HandleFunc("/health", handleHealth)
@@ -256,19 +256,19 @@ func handleProcess(w http.ResponseWriter, r *http.Request) {
 	// --- Step 3: Build prompt and call LLM for structured review ---
 	prompt := buildStructuredReviewPrompt(payload, cloneDir)
 	logf("info", "Built review prompt (%d chars)", len(prompt))
-	logf("info", "Calling openclaude (provider=%s, model=%s)...", provider, openclaudeModel)
+	logf("info", "Calling LLM (provider=%s, model=%s)...", provider, llmModel)
 
 	start := time.Now()
-	rawReview, ocResult, err := callOpenClaude(prompt, cloneDir)
+	rawReview, ocResult, err := callLLMCli(prompt, cloneDir)
 	duration := time.Since(start)
 
 	if err != nil {
-		logf("error", "openclaude failed after %v: %v", duration, err)
-		respond(w, ProcessResponse{Error: fmt.Sprintf("openclaude failed: %v", err), Logs: logs})
+		logf("error", "LLM failed after %v: %v", duration, err)
+		respond(w, ProcessResponse{Error: fmt.Sprintf("LLM failed: %v", err), Logs: logs})
 		return
 	}
 
-	logf("info", "openclaude responded in %v (%d chars)", duration, len(rawReview))
+	logf("info", "LLM responded in %v (%d chars)", duration, len(rawReview))
 	if ocResult != nil {
 		logf("info", "Stats: duration=%dms cost=$%.6f", ocResult.DurationMs, ocResult.TotalCost)
 		for model, usage := range ocResult.ModelUsage {
@@ -329,13 +329,13 @@ func handleProcess(w http.ResponseWriter, r *http.Request) {
 		"review_posted":   reviewPosted,
 		"comments_posted": commentsPosted,
 		"provider":        provider,
-		"model":           openclaudeModel,
+		"model":           llmModel,
 		"duration_ms":     duration.Milliseconds(),
 		"files_reviewed":  len(payload.FilesChanged),
 		"worker":          hostname(),
 	}
 	if ocResult != nil {
-		result["openclaude_cost_usd"] = ocResult.TotalCost
+		result["llm_cost_usd"] = ocResult.TotalCost
 	}
 
 	respond(w, ProcessResponse{Success: true, Result: result, Logs: logs})
@@ -654,7 +654,7 @@ func postStructuredReview(owner, repo string, prNumber int, commitSHA string,
 		}
 	}
 
-	bodyParts = append(bodyParts, fmt.Sprintf("\n\n---\n*Reviewed by KQueue codereview worker (%s/%s)*", provider, openclaudeModel))
+	bodyParts = append(bodyParts, fmt.Sprintf("\n\n---\n*Reviewed by KQueue codereview worker (%s/%s)*", provider, llmModel))
 
 	event := "COMMENT"
 	switch review.Verdict {
@@ -1113,14 +1113,14 @@ func readFileFromClone(cloneDir, filename string) string {
 	return content
 }
 
-// --- OpenClaude ---
+// --- LLMCli ---
 
-func callOpenClaude(prompt string, workDir string) (string, *OpenClaudeResult, error) {
+func callLLMCli(prompt string, workDir string) (string, *LLMCliResult, error) {
 	args := []string{
 		"-p",
 		"--bare",
 		"--provider", provider,
-		"--model", openclaudeModel,
+		"--model", llmModel,
 		"--output-format", "json",
 		"--no-session-persistence",
 		"--disallowedTools", "Bash", "Edit", "Read", "Write", "Glob", "Grep",
@@ -1131,25 +1131,25 @@ func callOpenClaude(prompt string, workDir string) (string, *OpenClaudeResult, e
 		args = append(args, "--add-dir", workDir)
 	}
 
-	cmd := exec.Command(openclaudeBin, args...)
+	cmd := exec.Command(llmBin, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = append(os.Environ(),
 		"OLLAMA_BASE_URL="+ollamaURL,
 		"OPENAI_BASE_URL="+ollamaURL+"/v1",
-		"OPENAI_MODEL="+openclaudeModel,
+		"OPENAI_MODEL="+llmModel,
 	)
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
 
-	log.Printf("running: %s %s", openclaudeBin, strings.Join(args, " "))
+	log.Printf("running: %s %s", llmBin, strings.Join(args, " "))
 
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", nil, fmt.Errorf("openclaude exited %d: %s", exitErr.ExitCode(), truncate(string(exitErr.Stderr), 500))
+			return "", nil, fmt.Errorf("LLM exited %d: %s", exitErr.ExitCode(), truncate(string(exitErr.Stderr), 500))
 		}
-		return "", nil, fmt.Errorf("openclaude exec: %w", err)
+		return "", nil, fmt.Errorf("LLM exec: %w", err)
 	}
 
 	var jsonLine string
@@ -1167,13 +1167,13 @@ func callOpenClaude(prompt string, workDir string) (string, *OpenClaudeResult, e
 		return strings.TrimSpace(string(output)), nil, nil
 	}
 
-	var result OpenClaudeResult
+	var result LLMCliResult
 	if err := json.Unmarshal([]byte(jsonLine), &result); err != nil {
 		return strings.TrimSpace(string(output)), nil, nil
 	}
 
 	if result.IsError {
-		return "", &result, fmt.Errorf("openclaude error: %s", result.Result)
+		return "", &result, fmt.Errorf("LLM error: %s", result.Result)
 	}
 
 	return result.Result, &result, nil
