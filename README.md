@@ -142,27 +142,86 @@ deploy/minimal/         Kubernetes manifests - core only (NATS + controller, no 
 deploy/base/            Kubernetes manifests - full (NATS + controller + example queues)
 deploy/examples/        Example configs and gVisor RuntimeClass
 test/                   Integration and e2e tests
-scripts/                Demo and load testing scripts
+scripts/
+  k8s-setup.sh          Build, deploy, and configure secrets on Kubernetes
+  k8s-teardown.sh       Remove all KQueue resources from the cluster
+  demo.sh               Interactive local demo
+  load-test.sh          Load testing script
 ```
 
 ## Kubernetes Deployment
 
-**Minimal (bring your own queues):**
+### One-command setup
 
 ```bash
-kubectl apply -k deploy/minimal/
-# Then edit the ConfigMap to add your queues:
-kubectl -n kqueue edit configmap kqueue-config
-kubectl -n kqueue rollout restart deployment kqueue-controller
+# Basic (uses local ollama for code reviews):
+make k8s-setup
+
+# With GitHub integration (post review comments to PRs):
+GITHUB_TOKEN=ghp_... make k8s-setup
+
+# With Claude API (best review quality):
+GITHUB_TOKEN=ghp_... ANTHROPIC_API_KEY=sk-ant-... make k8s-setup
 ```
 
-**Full (with example queues):**
+This script:
+1. Builds all Docker images
+2. Tags them for Kubernetes (`kqueue/controller`, `kqueue/sidecar`, etc.)
+3. Deploys NATS, controller, webhook, and RBAC via `kubectl apply -k deploy/base/`
+4. Creates Kubernetes Secrets for tokens (if provided)
+5. Patches the codereview worker to use Anthropic if `ANTHROPIC_API_KEY` is set
+6. Waits for pods to be ready
+
+### After setup
 
 ```bash
+# Start port-forwarding to access services
+make k8s-portforward
+
+# Check pod status and queue stats
+make k8s-status
+
+# Submit a job
+make submit-echo
+
+# Submit a code review
+make submit-review
+
+# Follow codereview worker logs
+make k8s-logs
+
+# Teardown everything
+make k8s-teardown
+```
+
+### Secrets
+
+Tokens are stored as Kubernetes Secrets and injected into pods as environment variables. They never appear in config files, container images, or `kubectl describe` output.
+
+```bash
+# Add/update secrets manually:
+kubectl -n kqueue create secret generic github-token --from-literal=token=ghp_...
+kubectl -n kqueue create secret generic anthropic-key --from-literal=key=sk-ant-...
+
+# Restart workers to pick up new secrets:
+kubectl -n kqueue rollout restart deployment kqueue-worker-codereview
+
+# Verify secrets are set in the pod:
+kubectl -n kqueue exec deploy/kqueue-worker-codereview -c worker -- \
+  sh -c 'echo "GITHUB=${GITHUB_TOKEN:+set} ANTHROPIC=${ANTHROPIC_API_KEY:+set}"'
+```
+
+### Manual deployment (without the setup script)
+
+```bash
+# Minimal (core only, no example queues):
+kubectl apply -k deploy/minimal/
+
+# Full (with all example queues):
 kubectl apply -k deploy/base/
 ```
 
-See [docs/ARCHITECTURE.md - Kubernetes Deployment](docs/ARCHITECTURE.md#54-kubernetes-deployment) for detailed steps including kind setup, image loading, and gVisor.
+See [docs/ARCHITECTURE.md - Kubernetes Deployment](docs/ARCHITECTURE.md#54-kubernetes-deployment) for detailed steps including kind/minikube setup, image loading for non-Rancher Desktop clusters, and gVisor.
 
 ## Testing
 

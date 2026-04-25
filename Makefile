@@ -1,5 +1,6 @@
 .PHONY: build docker-build docker-up docker-down test test-integration test-e2e \
-       submit-echo submit-nlp submit-sandbox submit-review submit-batch status logs clean help
+       submit-echo submit-nlp submit-sandbox submit-review submit-review-pr submit-batch \
+       status logs clean help k8s-setup k8s-teardown k8s-status k8s-logs k8s-portforward
 
 CONTROLLER_URL ?= http://localhost:8080
 
@@ -109,6 +110,38 @@ clean:
 	docker compose down -v --remove-orphans
 	rm -rf bin/
 	rm -f controller sidecar
+
+## k8s-setup: Build images and deploy to Kubernetes (set GITHUB_TOKEN and/or ANTHROPIC_API_KEY env vars)
+k8s-setup:
+	./scripts/k8s-setup.sh
+
+## k8s-teardown: Remove all KQueue resources from Kubernetes
+k8s-teardown:
+	./scripts/k8s-teardown.sh
+
+## k8s-status: Show Kubernetes pod status and queue stats
+k8s-status:
+	@echo "=== Pods ==="
+	@kubectl -n kqueue get pods
+	@echo ""
+	@echo "=== Secrets ==="
+	@kubectl -n kqueue get secrets 2>/dev/null || true
+	@echo ""
+	@echo "=== Queue Stats (requires port-forward) ==="
+	@curl -s $(CONTROLLER_URL)/api/v1/queues 2>/dev/null | python3 -m json.tool 2>/dev/null || echo "  Port-forward not active. Run: make k8s-portforward"
+
+## k8s-logs: Follow codereview worker logs in Kubernetes
+k8s-logs:
+	kubectl -n kqueue logs -l kqueue/queue=codereview -c worker -f --tail=50
+
+## k8s-portforward: Start port-forwarding for controller and webhook
+k8s-portforward:
+	@echo "Starting port-forwards (Ctrl+C to stop)..."
+	@echo "  Dashboard: http://localhost:8080"
+	@echo "  Webhook:   http://localhost:9000"
+	@kubectl -n kqueue port-forward svc/kqueue-controller 8080:8080 &
+	@kubectl -n kqueue port-forward svc/kqueue-webhook 9000:9000 &
+	@echo "Port-forwards started in background. Use 'kill %1 %2' to stop."
 
 ## help: Show available targets
 help:

@@ -355,22 +355,28 @@ func buildStructuredReviewPrompt(p ReviewPayload, cloneDir string) string {
 
 CRITICAL RULES - READ CAREFULLY:
 1. Respond with ONLY valid JSON. No markdown fences, no text before or after the JSON.
-2. Each comment "line" MUST match a line number from the numbered source listing below. Look at the "NN:" prefix on each source line.
-3. The "suggestion" MUST be the exact replacement code for the line at that line number. Copy the original line, then fix it. Do NOT write comments or explanations as the suggestion.
-4. If you cannot write a correct code fix, omit the "suggestion" field entirely - do not guess.
+2. Each comment "line" MUST be the line number where the PROBLEMATIC CODE is. Look at the "NN:" prefix in the source listing.
+3. The "suggestion" field is OPTIONAL. Only include it when you can write correct replacement code for the EXACT line(s) at that line number.
+4. OMIT the "suggestion" field when: the issue is a design concern, a missing feature, a general observation, or you cannot write a correct fix. Just use the "message" field to explain the issue.
+5. When you DO include a "suggestion", it MUST be code that REPLACES the line shown at that line number. Look at what is on that line and rewrite it.
 
-EXAMPLE - if the source shows:
-29: String sql = "SELECT * FROM users WHERE " + field + " = '" + value + "'";
+EXAMPLE 1 - SQL injection on line 63 which shows:
+63:         em.createNativeQuery("UPDATE orders SET status = '" + newStatus + "' WHERE id = " + orderId)
+CORRECT:
+{"file":"OrderService.java","line":63,"severity":"critical","message":"SQL injection via string concatenation","suggestion":"        em.createNativeQuery(\"UPDATE orders SET status = ?1 WHERE id = ?2\").setParameter(1, newStatus).setParameter(2, orderId)"}
 
-A correct comment would be:
-{"file":"Controller.java","line":29,"severity":"critical","message":"SQL injection via string concatenation","suggestion":"String sql = \"SELECT * FROM users WHERE \" + field + \" = ?\";\nreturn entityManager.createNativeQuery(sql, User.class).setParameter(1, value).getResultList();"}
+EXAMPLE 2 - hardcoded tax rates (design concern, no code fix):
+{"file":"PriceCalculator.java","line":5,"severity":"suggestion","message":"Tax rates are hardcoded. Consider loading from configuration or database."}
+NOTE: no "suggestion" field because this is a design observation, not a line fix.
 
-A WRONG comment would point to line 13 (class declaration) or suggest "// use parameterized queries".
+EXAMPLE 3 - WRONG (suggestion does not match the line):
+Line 83 shows: "double discount = results.isEmpty() ? 0.0 : ..."
+BAD: {"line":83,"suggestion":"List<?> results = em.createQuery(...)"} -- this replaces the wrong line!
 
 JSON schema:
-{"summary":"one sentence","verdict":"approve|request_changes|comment","comments":[{"file":"path","line":NUMBER,"severity":"critical|warning|suggestion|praise","message":"description","suggestion":"replacement code or omit"}]}
+{"summary":"one sentence","verdict":"approve|request_changes|comment","comments":[{"file":"path","line":NUMBER,"severity":"critical|warning|suggestion|praise","message":"description","suggestion":"OPTIONAL replacement code for that exact line"}]}
 
-Severities: critical=security/crash/data-loss, warning=bugs/leaks, suggestion=style/perf, praise=good code.
+Severities: critical=security/crash/data-loss, warning=bugs/leaks, suggestion=style/perf, praise=good code (never add suggestion to praise).
 
 `)
 
@@ -563,24 +569,49 @@ func extractJSON(text string) string {
 func postStructuredReview(owner, repo string, prNumber int, commitSHA string,
 	review StructuredReview, files []FileChange) (bool, int, error) {
 
-	// Build inline comments
+	// Build diff maps for each file (maps file line numbers to diff positions)
+	diffMaps := make(map[string]*DiffLineMap)
+	for _, f := range files {
+		diffMaps[f.Filename] = buildDiffMap(f.Patch)
+	}
+
+	// Build inline comments, snapping LLM line numbers to nearest diff-visible line
 	var ghComments []GHReviewComment
-	for _, c := range review.Comments {
+	for i, c := range review.Comments {
 		if c.File == "" || c.Line <= 0 {
 			continue
 		}
 
-		// Verify the line is in the diff (GitHub rejects comments on unchanged lines)
-		if !isLineInDiff(c.File, c.Line, files) {
-			log.Printf("Skipping comment on %s:%d — not in diff", c.File, c.Line)
+		// Resolve short filenames to full paths
+		resolved := resolveFilename(c.File, files)
+		if resolved != c.File {
+			log.Printf("Resolved filename %s -> %s", c.File, resolved)
+			review.Comments[i].File = resolved
+			c.File = resolved
+		}
+
+		dm, exists := diffMaps[c.File]
+		if !exists {
+			log.Printf("Skipping comment on %s:%d — file not in diff", c.File, c.Line)
 			continue
+		}
+
+		diffLine, found := dm.findDiffLine(c.Line)
+		if !found {
+			log.Printf("Skipping comment on %s:%d — line not near any diff hunk", c.File, c.Line)
+			continue
+		}
+
+		if diffLine != c.Line {
+			log.Printf("Adjusted comment %s:%d -> %s:%d (nearest diff line)", c.File, c.Line, c.File, diffLine)
+			review.Comments[i].Line = diffLine // update for the skipped-comments check below
 		}
 
 		body := formatCommentBody(c)
 		ghComments = append(ghComments, GHReviewComment{
 			Path: c.File,
-			Line: c.Line,
-			Side: "RIGHT", // comment on the new version of the file
+			Line: diffLine,
+			Side: "RIGHT",
 			Body: body,
 		})
 	}
@@ -603,10 +634,15 @@ func postStructuredReview(owner, repo string, prNumber int, commitSHA string,
 		))
 	}
 
-	// Add skipped comments (not in diff) as a list in the body
+	// Add skipped comments (not posted inline) as a list in the body
+	postedLines := make(map[string]bool)
+	for _, gc := range ghComments {
+		postedLines[fmt.Sprintf("%s:%d", gc.Path, gc.Line)] = true
+	}
 	var skippedComments []ReviewComment
 	for _, c := range review.Comments {
-		if c.File == "" || c.Line <= 0 || !isLineInDiff(c.File, c.Line, files) {
+		key := fmt.Sprintf("%s:%d", c.File, c.Line)
+		if !postedLines[key] {
 			skippedComments = append(skippedComments, c)
 		}
 	}
@@ -729,8 +765,8 @@ func formatCommentBody(c ReviewComment) string {
 	parts = append(parts, "")
 	parts = append(parts, c.Message)
 
-	// Add suggestion block if available
-	if c.Suggestion != "" {
+	// Add suggestion block only if the suggestion looks like real code
+	if c.Suggestion != "" && isValidSuggestion(c.Suggestion) {
 		parts = append(parts, "")
 		parts = append(parts, "```suggestion")
 		parts = append(parts, c.Suggestion)
@@ -740,47 +776,158 @@ func formatCommentBody(c ReviewComment) string {
 	return strings.Join(parts, "\n")
 }
 
-// isLineInDiff checks if a line number appears in the diff for a file.
-func isLineInDiff(filename string, line int, files []FileChange) bool {
-	for _, f := range files {
-		if f.Filename != filename || f.Patch == "" {
+// isValidSuggestion checks if a suggestion looks like actual replacement code
+// vs a text comment or explanation that shouldn't be in a suggestion block.
+func isValidSuggestion(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+
+	// If every line starts with // or # it's just a comment, not a code fix
+	lines := strings.Split(s, "\n")
+	allComments := true
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
 			continue
 		}
-		// Parse diff hunks to find valid line ranges
-		lines := parseDiffLines(f.Patch)
-		for _, l := range lines {
-			if l == line {
-				return true
-			}
+		if !strings.HasPrefix(trimmed, "//") && !strings.HasPrefix(trimmed, "#") &&
+			!strings.HasPrefix(trimmed, "*") {
+			allComments = false
+			break
 		}
 	}
-	return false
+	if allComments {
+		return false
+	}
+
+	// Reject suggestions that are clearly natural language, not code
+	lowered := strings.ToLower(s)
+	naturalLangPrefixes := []string{
+		"consider ", "use ", "add ", "implement ", "ensure ", "replace ",
+		"you should ", "it would ", "this should ", "try ", "avoid ",
+		"instead of ", "make sure ", "do not ", "don't ",
+	}
+	for _, prefix := range naturalLangPrefixes {
+		if strings.HasPrefix(lowered, prefix) {
+			return false
+		}
+	}
+
+	return true
 }
 
-// parseDiffLines extracts the new-side line numbers from a unified diff patch.
-func parseDiffLines(patch string) []int {
-	var lines []int
-	hunkRe := regexp.MustCompile(`@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@`)
+// DiffLineMap maps file line numbers to their visibility in the diff.
+// GitHub allows comments on any line visible in the diff (added, context, or removed).
+type DiffLineMap struct {
+	// Lines visible on the RIGHT side (new file) — these are commentable
+	RightLines map[int]bool
+	// All right-side lines in order, for nearest-line lookup
+	SortedLines []int
+}
 
-	currentLine := 0
-	for _, rawLine := range strings.Split(patch, "\n") {
-		if m := hunkRe.FindStringSubmatch(rawLine); len(m) > 1 {
-			currentLine, _ = strconv.Atoi(m[1])
+// buildDiffMap parses a unified diff patch and returns all commentable line numbers.
+func buildDiffMap(patch string) *DiffLineMap {
+	dm := &DiffLineMap{
+		RightLines: make(map[int]bool),
+	}
+	if patch == "" {
+		return dm
+	}
+
+	hunkRe := regexp.MustCompile(`@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@`)
+	currentNewLine := 0
+
+	for _, line := range strings.Split(patch, "\n") {
+		if m := hunkRe.FindStringSubmatch(line); len(m) > 1 {
+			currentNewLine, _ = strconv.Atoi(m[3])
 			continue
 		}
-		if currentLine == 0 {
+		if currentNewLine == 0 {
 			continue
 		}
-		if strings.HasPrefix(rawLine, "-") {
-			// Removed line — doesn't count in new file
+		if strings.HasPrefix(line, "-") {
+			// Deleted line — only on LEFT side, skip for right-side mapping
 			continue
 		}
-		if strings.HasPrefix(rawLine, "+") || !strings.HasPrefix(rawLine, "\\") {
-			lines = append(lines, currentLine)
-			currentLine++
+		if strings.HasPrefix(line, "\\") {
+			// "\ No newline at end of file" — skip
+			continue
+		}
+		// This is either a "+" (added) or " " (context) line — both are visible on RIGHT
+		dm.RightLines[currentNewLine] = true
+		dm.SortedLines = append(dm.SortedLines, currentNewLine)
+		currentNewLine++
+	}
+
+	return dm
+}
+
+// findDiffLine takes a file line number from the LLM and returns the best
+// commentable line in the diff. Returns (line, true) if found, (0, false) if
+// the line is too far from any diff hunk.
+func (dm *DiffLineMap) findDiffLine(targetLine int) (int, bool) {
+	// Exact match
+	if dm.RightLines[targetLine] {
+		return targetLine, true
+	}
+
+	// Find nearest visible line within 5 lines
+	bestLine := 0
+	bestDist := 999
+	for _, l := range dm.SortedLines {
+		dist := targetLine - l
+		if dist < 0 {
+			dist = -dist
+		}
+		if dist < bestDist {
+			bestDist = dist
+			bestLine = l
 		}
 	}
-	return lines
+
+	if bestDist <= 5 {
+		return bestLine, true
+	}
+
+	return 0, false
+}
+
+// getDiffMapForFile returns the diff map for a specific file.
+// Handles both full paths and short filenames from the LLM.
+func getDiffMapForFile(filename string, files []FileChange) *DiffLineMap {
+	for _, f := range files {
+		if f.Filename == filename {
+			return buildDiffMap(f.Patch)
+		}
+	}
+	return &DiffLineMap{RightLines: make(map[int]bool)}
+}
+
+// resolveFilename maps a potentially short filename from the LLM to the full
+// path used by GitHub. E.g. "OrderService.java" -> "src/main/.../OrderService.java"
+func resolveFilename(llmName string, files []FileChange) string {
+	// Exact match first
+	for _, f := range files {
+		if f.Filename == llmName {
+			return llmName
+		}
+	}
+	// Try suffix match (LLM often drops the path prefix)
+	for _, f := range files {
+		if strings.HasSuffix(f.Filename, "/"+llmName) || strings.HasSuffix(f.Filename, "\\"+llmName) {
+			return f.Filename
+		}
+	}
+	// Try just the base name
+	for _, f := range files {
+		parts := strings.Split(f.Filename, "/")
+		if parts[len(parts)-1] == llmName {
+			return f.Filename
+		}
+	}
+	return llmName // return as-is, will fail to match diff
 }
 
 func normalizeSeverity(s string) string {
