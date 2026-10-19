@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="Generic K8 Work Queues logo" width="180">
+</p>
+
 # KQueue
 
 A scalable job queue processing framework for Kubernetes. Submit work via REST API, process it with auto-scaling worker pods, and monitor everything through a built-in dashboard.
