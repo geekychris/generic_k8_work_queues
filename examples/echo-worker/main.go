@@ -108,21 +108,21 @@ func handleProcess(w http.ResponseWriter, r *http.Request) {
 		default:
 			// Unknown action, echo back with a note
 			result = map[string]interface{}{
-				"action":         action,
-				"note":           "unknown action, echoing payload",
-				"payload":        payloadMap,
-				"processing_ms":  processingTime.Milliseconds(),
-				"worker":         hostname(),
+				"action":            action,
+				"note":              "unknown action, echoing payload",
+				"payload":           payloadMap,
+				"processing_ms":     processingTime.Milliseconds(),
+				"worker":            hostname(),
 				"available_actions": []string{"echo", "uppercase", "count", "sort", "reverse", "hash", "delay"},
 			}
 		}
 	} else {
 		// No action field - default echo behavior (works with any JSON type)
 		result = map[string]interface{}{
-			"echo":           json.RawMessage(req.Payload),
-			"processing_ms":  processingTime.Milliseconds(),
-			"worker":         hostname(),
-			"processed_at":   time.Now().UTC().Format(time.RFC3339),
+			"echo":          json.RawMessage(req.Payload),
+			"processing_ms": processingTime.Milliseconds(),
+			"worker":        hostname(),
+			"processed_at":  time.Now().UTC().Format(time.RFC3339),
 		}
 	}
 
@@ -156,13 +156,13 @@ func handleCount(payload map[string]interface{}, dur time.Duration) interface{} 
 	text, _ := payload["text"].(string)
 	words := strings.Fields(text)
 	return map[string]interface{}{
-		"action":          "count",
-		"input":           text,
-		"words":           len(words),
-		"characters":      len(text),
-		"lines":           len(strings.Split(text, "\n")),
-		"processing_ms":   dur.Milliseconds(),
-		"worker":          hostname(),
+		"action":        "count",
+		"input":         text,
+		"words":         len(words),
+		"characters":    len(text),
+		"lines":         len(strings.Split(text, "\n")),
+		"processing_ms": dur.Milliseconds(),
+		"worker":        hostname(),
 	}
 }
 

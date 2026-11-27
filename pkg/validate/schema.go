@@ -29,8 +29,8 @@ type Property struct {
 
 // ValidationError contains details about why a payload was rejected.
 type ValidationError struct {
-	Queue   string   `json:"queue"`
-	Errors  []string `json:"errors"`
+	Queue  string   `json:"queue"`
+	Errors []string `json:"errors"`
 }
 
 func (e *ValidationError) Error() string {
