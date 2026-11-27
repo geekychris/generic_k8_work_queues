@@ -1,0 +1,433 @@
+openapi: 3.0.3
+info:
+  title: KQueue API
+  version: "1.0.0"
+  description: |
+    REST API for the KQueue controller and the GitHub webhook receiver.
+
+    **Note on scope:** this spec documents the intended contract of the
+    controller (`cmd/controller`) as derived from `pkg/api/types.go` and
+    `docs/ARCHITECTURE.md`. As of this writing `cmd/controller` and
+    `cmd/sidecar` are not present in this repository (see the "Known Issues"
+    section of the top-level README.md), so the controller paths below
+    describe the API the rest of the codebase (worker contract, docs, tests)
+    is built against, not a currently-running service. The webhook paths
+    describe `cmd/webhook`, which does exist and run today.
+servers:
+  - url: http://localhost:8080
+    description: Controller (not currently buildable -- see Known Issues in README.md)
+  - url: http://localhost:9000
+    description: Webhook service (cmd/webhook)
+tags:
+  - name: controller
+    description: Job submission, queue stats, and health/metrics for the KQueue controller.
+  - name: webhook
+    description: GitHub webhook receiver that queues code review jobs.
+paths:
+  /api/v1/jobs:
+    post:
+      tags: [controller]
+      summary: Submit a job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitRequest"
+      responses:
+        "201":
+          description: Job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmitResponse"
+        "400":
+          description: Missing queue, unknown queue, or invalid JSON body
+        "422":
+          description: Payload fails schema validation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+        "500":
+          description: NATS publish failure or other internal error
+
+  /api/v1/jobs/{id}:
+    get:
+      tags: [controller]
+      summary: Get job by ID
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      responses:
+        "200":
+          description: Job found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          description: Job not found
+
+  /api/v1/jobs/{id}/logs:
+    get:
+      tags: [controller]
+      summary: Get per-job log entries
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      responses:
+        "200":
+          description: Log entries for the job
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LogEntry"
+        "404":
+          description: Job not found
+
+  /api/v1/queues:
+    get:
+      tags: [controller]
+      summary: List all queue stats
+      responses:
+        "200":
+          description: Stats for every configured queue
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/QueueStats"
+
+  /api/v1/queues/{name}:
+    get:
+      tags: [controller]
+      summary: Get single queue stats
+      parameters:
+        - $ref: "#/components/parameters/QueueName"
+      responses:
+        "200":
+          description: Stats for the named queue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueStats"
+        "404":
+          description: Queue not found
+
+  /api/v1/queues/{name}/schema:
+    get:
+      tags: [controller]
+      summary: Get payload schema
+      parameters:
+        - $ref: "#/components/parameters/QueueName"
+      responses:
+        "200":
+          description: JSON Schema configured for this queue's payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  queue:
+                    type: string
+                  schema:
+                    type: object
+        "404":
+          description: Queue not found
+
+  /api/v1/queues/{name}/jobs:
+    get:
+      tags: [controller]
+      summary: List jobs for a queue
+      parameters:
+        - $ref: "#/components/parameters/QueueName"
+        - name: status
+          in: query
+          required: false
+          description: Filter by job status
+          schema:
+            $ref: "#/components/schemas/JobStatus"
+      responses:
+        "200":
+          description: Up to 100 jobs for the queue
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Job"
+        "404":
+          description: Queue not found
+
+  /api/v1/queues/{name}/dlq:
+    get:
+      tags: [controller]
+      summary: List dead-letter jobs
+      parameters:
+        - $ref: "#/components/parameters/QueueName"
+      responses:
+        "200":
+          description: Dead-lettered jobs for the queue
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Job"
+        "404":
+          description: Queue not found
+
+  /api/v1/queues/{name}/dlq/{jobId}/retry:
+    post:
+      tags: [controller]
+      summary: Retry a DLQ job
+      parameters:
+        - $ref: "#/components/parameters/QueueName"
+        - $ref: "#/components/parameters/JobID"
+      responses:
+        "200":
+          description: Job re-queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmitResponse"
+        "404":
+          description: Queue not found or DLQ job not found
+
+  /health:
+    get:
+      tags: [controller, webhook]
+      summary: Health check
+      description: Served by both the controller and the webhook service.
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /metrics:
+    get:
+      tags: [controller]
+      summary: Prometheus metrics
+      responses:
+        "200":
+          description: Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /webhook/github:
+    post:
+      tags: [webhook]
+      summary: GitHub webhook receiver
+      description: |
+        Accepts GitHub webhook deliveries. Supported `X-GitHub-Event` values
+        are `ping`, `pull_request`, and `push`; any other event type is
+        acknowledged with `{"status":"ignored","event":"<type>"}` and not
+        forwarded. If `WEBHOOK_SECRET` is configured, requests must carry a
+        valid `X-Hub-Signature-256` HMAC header.
+      parameters:
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          schema:
+            type: string
+            example: pull_request
+        - name: X-Hub-Signature-256
+          in: header
+          required: false
+          description: HMAC-SHA256 signature, required only if WEBHOOK_SECRET is set.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Raw GitHub webhook payload (ping, pull_request, or push event).
+      responses:
+        "200":
+          description: Event acknowledged, ignored, or forwarded and queued
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/WebhookPong"
+                  - $ref: "#/components/schemas/WebhookIgnored"
+                  - $ref: "#/components/schemas/WebhookQueued"
+        "400":
+          description: Failed to read body or parse event
+        "401":
+          description: Invalid or missing HMAC signature
+        "405":
+          description: Method not allowed (non-POST)
+        "502":
+          description: Upstream controller submission failed
+
+  /webhook/test:
+    post:
+      tags: [webhook]
+      summary: Manually trigger a review job
+      description: Submits a review job without a real GitHub webhook delivery.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewPayload"
+      responses:
+        "200":
+          description: Job queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookQueued"
+        "400":
+          description: Invalid JSON body
+        "405":
+          description: Method not allowed (non-POST)
+        "502":
+          description: Upstream controller submission failed
+
+components:
+  parameters:
+    JobID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    QueueName:
+      name: name
+      in: path
+      required: true
+      schema:
+        type: string
+
+  schemas:
+    JobStatus:
+      type: string
+      enum: [pending, processing, completed, failed, dead_letter]
+
+    Job:
+      type: object
+      properties:
+        id: { type: string }
+        queue: { type: string }
+        payload: { type: object }
+        status: { $ref: "#/components/schemas/JobStatus" }
+        result: { type: object }
+        error: { type: string }
+        attempts: { type: integer }
+        max_retries: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time, nullable: true }
+        completed_at: { type: string, format: date-time, nullable: true }
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+      required: [id, queue, status, attempts, max_retries, created_at, updated_at]
+
+    SubmitRequest:
+      type: object
+      properties:
+        queue: { type: string }
+        payload: { type: object }
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+      required: [queue, payload]
+
+    SubmitResponse:
+      type: object
+      properties:
+        job_id: { type: string }
+        queue: { type: string }
+        status: { $ref: "#/components/schemas/JobStatus" }
+      required: [job_id, queue, status]
+
+    QueueStats:
+      type: object
+      properties:
+        name: { type: string }
+        pending: { type: integer, format: int64 }
+        processing: { type: integer, format: int64 }
+        completed: { type: integer, format: int64 }
+        failed: { type: integer, format: int64 }
+        dead_letter: { type: integer, format: int64 }
+        workers: { type: integer }
+        min_workers: { type: integer }
+        max_workers: { type: integer }
+      required: [name, pending, processing, completed, failed, dead_letter, workers, min_workers, max_workers]
+
+    LogEntry:
+      type: object
+      properties:
+        level: { type: string, example: info }
+        message: { type: string }
+      required: [level, message]
+
+    ValidationError:
+      type: object
+      properties:
+        error: { type: string }
+        queue: { type: string }
+        details: { type: string }
+
+    ReviewPayload:
+      type: object
+      description: Submitted as the `payload` of a `codereview` queue job.
+      properties:
+        action: { type: string, example: review_pr }
+        repo_owner: { type: string }
+        repo_name: { type: string }
+        clone_url: { type: string }
+        ref: { type: string }
+        pr_number: { type: integer }
+        pr_title: { type: string }
+        pr_body: { type: string }
+        sender: { type: string }
+        commit_sha: { type: string }
+        diff_url: { type: string }
+        files_changed:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileChange"
+      required: [repo_owner, repo_name]
+
+    FileChange:
+      type: object
+      properties:
+        filename: { type: string }
+        status: { type: string, enum: [added, modified, removed] }
+        patch: { type: string }
+      required: [filename, status]
+
+    WebhookPong:
+      type: object
+      properties:
+        status: { type: string, example: pong }
+
+    WebhookIgnored:
+      type: object
+      properties:
+        status: { type: string, example: ignored }
+        event: { type: string }
+
+    WebhookQueued:
+      type: object
+      properties:
+        status: { type: string, example: queued }
+        job_id: { type: string }
+        queue: { type: string }
