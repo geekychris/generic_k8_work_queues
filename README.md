@@ -91,6 +91,10 @@ See [docs/ARCHITECTURE.md - Code Review System](docs/ARCHITECTURE.md#8-code-revi
 | `GET` | `/api/v1/queues/{name}/dlq` | List dead letter jobs |
 | `POST` | `/api/v1/queues/{name}/dlq/{id}/retry` | Retry a DLQ job |
 
+A full OpenAPI 3.0 spec (controller + webhook service, including the webhook's
+`/webhook/github` and `/webhook/test` endpoints) is at
+[docs/openapi.yaml](docs/openapi.yaml).
+
 ## Creating a Worker
 
 Workers implement two HTTP endpoints on port 8080:
@@ -236,6 +240,30 @@ make test-e2e           # 5 e2e tests (full stack, requires docker-compose runni
 ```
 
 See [docs/ARCHITECTURE.md - Running Tests](docs/ARCHITECTURE.md#53-running-tests) for details on what each suite covers, running individual tests, and debugging failures.
+
+## Known Issues
+
+- **`cmd/controller` and `cmd/sidecar` are missing from this repository.**
+  Only `cmd/webhook` exists under `cmd/`. Everything that depends on building
+  or running the controller or sidecar images is currently blocked,
+  including `make build`, `make docker-build`, `docker compose up`,
+  `make k8s-setup`, and `scripts/demo.sh`. The likely root cause was a bug in
+  `.gitignore` (bare `controller` and `sidecar` patterns matched
+  `cmd/controller/` and `cmd/sidecar/` anywhere in the tree, not just the
+  root-level build artifacts `make clean` produces) -- that bug is fixed in
+  this change, but the two services themselves were never committed, even in
+  the repository's first commit, so fixing `.gitignore` alone does not
+  restore them. Reconstructing both services from scratch is a
+  project-sized rewrite and is out of scope here; the best starting points
+  for that follow-up are [docs/ARCHITECTURE.md section
+  2](docs/ARCHITECTURE.md#2-architecture-deep-dive) (controller, sidecar, and
+  autoscaler design) and `test/integration_test.go` (the controller's
+  expected HTTP behavior).
+- **"Make it part of the running apps of m2"** could not be actioned: `m2`
+  is not defined anywhere in this workspace (no second repository, no
+  shared run notes, no mention in this README, `docs/`, or git history).
+  Clarification on what `m2` refers to is needed before this part of the
+  request can be scoped.
 
 ## License
 

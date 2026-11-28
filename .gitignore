@@ -1,7 +1,7 @@
 # Go binaries
 bin/
-controller
-sidecar
+/controller
+/sidecar
 *.exe
 *.exe~
 *.dll

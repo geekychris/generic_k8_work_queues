@@ -115,6 +115,33 @@ of two modes:
 | `422` | Payload fails schema validation (returns `{error, queue, details}`) |
 | `500` | NATS publish failure, internal error |
 
+A machine-readable version of this table lives in
+[`docs/openapi.yaml`](openapi.yaml) (OpenAPI 3.0).
+
+#### Webhook Service REST Reference
+
+Unlike the controller above, the webhook service (`cmd/webhook/main.go`) is
+present and runnable in this repository today. It receives GitHub webhook
+events and forwards them to the controller's `POST /api/v1/jobs` as
+`codereview` jobs; see section 8 for the full code review pipeline.
+
+| Method | Path | Request Body | Success Response | Status | Description |
+|--------|------|-------------|------------------|--------|-------------|
+| `POST` | `/webhook/github` | Raw GitHub webhook payload | `{status: pong\|ignored\|queued, ...}` | `200` | Receives `ping`, `pull_request`, `push` events (others acknowledged as `ignored`) |
+| `POST` | `/webhook/test` | `ReviewPayload` | `{status: "queued", job_id, queue}` | `200` | Manually trigger a review job without a real GitHub delivery |
+| `GET` | `/health` | -- | `{"status":"ok"}` | `200` | Health check |
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| `400` | Failed to read body, or failed to parse the GitHub event / test payload JSON |
+| `401` | Invalid or missing `X-Hub-Signature-256` HMAC signature (only enforced when `WEBHOOK_SECRET` is set) |
+| `405` | Non-`POST` method |
+| `502` | Upstream controller rejected or failed the job submission |
+
+See [`docs/openapi.yaml`](openapi.yaml) for the full request/response schemas.
+
 #### Job Lifecycle State Machine
 
 ```mermaid

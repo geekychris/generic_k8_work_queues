@@ -459,43 +459,43 @@ func TestCalculateDesired_TableDriven(t *testing.T) {
 		want     int
 	}{
 		{
-			name: "threshold_scale_up",
+			name:     "threshold_scale_up",
 			strategy: "threshold", pending: 20, proc: 0, current: 2,
 			min: 1, max: 10, upThr: 10, downThr: 2, upStep: 2, downStep: 1,
 			want: 4,
 		},
 		{
-			name: "threshold_scale_down",
+			name:     "threshold_scale_down",
 			strategy: "threshold", pending: 1, proc: 0, current: 5,
 			min: 1, max: 10, upThr: 10, downThr: 2, upStep: 2, downStep: 1,
 			want: 4,
 		},
 		{
-			name: "threshold_hold_steady",
+			name:     "threshold_hold_steady",
 			strategy: "threshold", pending: 5, proc: 0, current: 3,
 			min: 1, max: 10, upThr: 10, downThr: 2, upStep: 2, downStep: 1,
 			want: 3,
 		},
 		{
-			name: "target_per_worker_ceil",
+			name:     "target_per_worker_ceil",
 			strategy: "target_per_worker", pending: 11, proc: 0, current: 1,
 			min: 1, max: 20, tpw: 5,
 			want: 3, // ceil(11/5) = 3
 		},
 		{
-			name: "target_per_worker_clamped_to_max",
+			name:     "target_per_worker_clamped_to_max",
 			strategy: "target_per_worker", pending: 100, proc: 0, current: 1,
 			min: 1, max: 5, tpw: 2,
 			want: 5,
 		},
 		{
-			name: "rate_scale_up",
+			name:     "rate_scale_up",
 			strategy: "rate", pending: 50, proc: 0, current: 5,
 			min: 1, max: 20, upThr: 5, downThr: 1, upStep: 3, downStep: 1,
 			want: 8, // 50/5=10 > 5 => 5+3=8
 		},
 		{
-			name: "rate_scale_down",
+			name:     "rate_scale_down",
 			strategy: "rate", pending: 2, proc: 0, current: 10,
 			min: 1, max: 20, upThr: 5, downThr: 1, upStep: 3, downStep: 2,
 			want: 8, // 2/10=0.2 < 1 => 10-2=8
